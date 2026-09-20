@@ -17,26 +17,22 @@ const DESTINATION_ICON: Record<BufferDestination, string> = {
 };
 
 export function RescheduleTriagePanel({ demo }: { demo: boolean }) {
-  const [plan, setPlan] = useState<ReschedulePlan | null>(demo ? demoReschedulePlan : null);
-  const [buffers, setBuffers] = useState<BufferAllocation[]>(demo ? demoBufferAllocations : []);
+  const [plan, setPlan] = useState<ReschedulePlan | null>(null);
+  const [buffers, setBuffers] = useState<BufferAllocation[]>([]);
   const [running, setRunning] = useState(false);
-  const [open, setOpen] = useState(Boolean(demo ? demoReschedulePlan : false));
+  const [open, setOpen] = useState(false);
 
   const runReschedule = async () => {
     setRunning(true);
-    if (demo) {
-      window.setTimeout(() => {
+    try {
+      if (demo) {
         setPlan(demoReschedulePlan);
         setBuffers(demoBufferAllocations);
-        setOpen(true);
-        setRunning(false);
-      }, 500);
-      return;
-    }
-    try {
-      const nextPlan = await api.rescheduleBuffer();
-      setPlan(nextPlan);
-      setBuffers(await api.listBufferAllocations());
+      } else {
+        const nextPlan = await api.rescheduleBuffer();
+        setPlan(nextPlan);
+        setBuffers(await api.listBufferAllocations());
+      }
       setOpen(true);
     } catch {
       setOpen(false);

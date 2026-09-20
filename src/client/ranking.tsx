@@ -34,7 +34,7 @@ type ZoneId = (typeof ZONES)[number]["id"];
 const zoneOf = (score: number): ZoneId => (score >= 7 ? "red" : score >= 5 ? "amber" : "green");
 const ZONE_LABEL: Record<ZoneId, string> = { red: "Vermelha", amber: "Amarela", green: "Verde" };
 
-export function RankingView({ ranking, allocations, demo, onChanged }: { ranking: SubjectRanking[]; allocations: DayAllocation[]; demo: boolean; onChanged: () => Promise<void> }) {
+export function RankingView({ ranking, allocations, onChanged, demo }: { ranking: SubjectRanking[]; allocations: DayAllocation[]; onChanged: () => Promise<void>; demo: boolean }) {
   const [managing, setManaging] = useState<SubjectRanking | null>(null);
   const top = ranking[0];
   const fallen = ranking.filter((row) => row.movement === "down");
@@ -48,15 +48,15 @@ export function RankingView({ ranking, allocations, demo, onChanged }: { ranking
       {risen.length > 0 && <div className="rank-ok"><ArrowUp size={18} /><div><strong>{risen.length} matéria{risen.length > 1 ? "s" : ""} subiram</strong><span>{risen.map((row) => row.name.split("·")[0].trim()).join(", ")} — estabilidade melhorou na janela recente.</span></div></div>}
     </section> : null}
     <section className="card table-card">
-      {ranking.length ? <div className="section-heading"><div><p className="eyebrow">Ordem de ataque</p><h2>Ranking de prioridade</h2></div>{demo && <span className="demo-hint">Pré-visualização</span>}</div> : null}
+      {ranking.length ? <div className="section-heading"><div><p className="eyebrow">Ordem de ataque</p><h2>Ranking de prioridade</h2></div></div> : null}
       {ranking.length ? <div className="zone-legend">{ZONES.map((zone) => <span key={zone.id} className={`zone-chip ${zone.id}`}><i />{zone.label}<em>{zone.hint}</em></span>)}</div> : null}
       {ranking.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Matéria</th><th>Movimento</th><th>Zona</th><th>Prioridade</th><th>Acerto</th><th>Reforço</th><th></th></tr></thead><tbody>{ranking.map((row) => {
         const zone = zoneOf(row.priorityScore);
         const allocation = bySubject.get(row.id);
-        return <tr key={row.id} className={`zone-row ${zone}`}><td><span className="rank-position">{row.rank}</span></td><td><span className="subject-cell"><span className="color-dot" style={{ background: colorOf(row.color) }} />{row.name}</span></td><td><MovementBadge movement={row.movement} /></td><td><span className={`zone-pill ${zone} ${demo ? "faded" : ""}`} title={ZONE_LABEL[zone]}><i />{ZONE_LABEL[zone]}</span></td><td><div className="priority-cell"><strong>{row.priorityScore}</strong><div className="progress-inline"><span style={{ width: `${Math.min(100, row.priorityScore / 9 * 100)}%`, background: row.priorityScore >= 7 ? "#ff5a71" : row.priorityScore >= 5 ? "#ffca76" : "#34d399" }} /></div></div></td><td><strong className={row.accuracy >= row.goalAccuracy ? "good" : "needs-work"}>{row.accuracy}%</strong></td><td>{allocation ? <button className="alloc-badge" title={allocation.note ?? ""} onClick={() => setManaging(row)}><CalendarCheck size={13} /> {DAYS[allocation.weekday]} · {minutes(allocation.minutes)}</button> : <span className="muted-text">—</span>}</td><td><button className="icon-button" title="Alocar reforço ou gerenciar" onClick={() => setManaging(row)}><Pencil size={15} /></button></td></tr>;
+        return <tr key={row.id} className={`zone-row ${zone}`}><td><span className="rank-position">{row.rank}</span></td><td><span className="subject-cell"><span className="color-dot" style={{ background: colorOf(row.color) }} />{row.name}</span></td><td><MovementBadge movement={row.movement} /></td><td><span className={`zone-pill ${zone}`} title={ZONE_LABEL[zone]}><i />{ZONE_LABEL[zone]}</span></td><td><div className="priority-cell"><strong>{row.priorityScore}</strong><div className="progress-inline"><span style={{ width: `${Math.min(100, row.priorityScore / 9 * 100)}%`, background: row.priorityScore >= 7 ? "#ff5a71" : row.priorityScore >= 5 ? "#ffca76" : "#34d399" }} /></div></div></td><td><strong className={row.accuracy >= row.goalAccuracy ? "good" : "needs-work"}>{row.accuracy}%</strong></td><td>{allocation ? <button className="alloc-badge" title={allocation.note ?? ""} onClick={() => setManaging(row)}><CalendarCheck size={13} /> {DAYS[allocation.weekday]} · {minutes(allocation.minutes)}</button> : <span className="muted-text">—</span>}</td><td><button className="icon-button" title="Alocar reforço ou gerenciar" onClick={() => setManaging(row)}><Pencil size={15} /></button></td></tr>;
       })}</tbody></table></div> : <div className="empty-state"><div><Crown size={24} /></div><p>Cadastre matérias e registre blocos de questões — o ranking de prioridade aparece aqui com as setinhas de subida e queda.</p></div>}
     </section>
-    {managing && <AllocationModal subject={managing} allocation={bySubject.get(managing.id)} onClose={() => setManaging(null)} onSaved={async () => { await onChanged(); setManaging(null); }} />}
+    {managing && <AllocationModal subject={managing} allocation={bySubject.get(managing.id)} onClose={() => setManaging(null)} onSaved={async () => { await onChanged(); setManaging(null); }} demo={demo} />}
   </div>;
 }
 
@@ -67,7 +67,7 @@ function MovementBadge({ movement }: { movement: SubjectRanking["movement"] }) {
   return <span className="movement-badge stable" title="Posição estável"><Minus size={14} /> Estável</span>;
 }
 
-function AllocationModal({ subject, allocation, onClose, onSaved }: { subject: SubjectRanking; allocation?: DayAllocation | undefined; onClose: () => void; onSaved: () => Promise<void> }) {
+function AllocationModal({ subject, allocation, onClose, onSaved, demo }: { subject: SubjectRanking; allocation?: DayAllocation | undefined; onClose: () => void; onSaved: () => Promise<void>; demo: boolean }) {
   const [weekday, setWeekday] = useState<number | null>(allocation?.weekday ?? null);
   const [minutesValue, setMinutesValue] = useState<number>(allocation?.minutes ?? 60);
   const [note, setNote] = useState<string>(allocation?.note ?? "");
@@ -78,7 +78,7 @@ function AllocationModal({ subject, allocation, onClose, onSaved }: { subject: S
     if (weekday === null) return;
     setSaving(true);
     try {
-      await api.saveDayAllocation({ subjectId: subject.id, weekday, minutes: minutesValue, note: note.trim() || null });
+      if (!demo) await api.saveDayAllocation({ subjectId: subject.id, weekday, minutes: minutesValue, note: note.trim() || null });
       await onSaved();
     } catch (error) {
       window.alert(String(error));
@@ -89,7 +89,7 @@ function AllocationModal({ subject, allocation, onClose, onSaved }: { subject: S
   const remove = async () => {
     setSaving(true);
     try {
-      await api.deleteDayAllocation(subject.id);
+      if (!demo) await api.deleteDayAllocation(subject.id);
       await onSaved();
     } catch (error) {
       window.alert(String(error));

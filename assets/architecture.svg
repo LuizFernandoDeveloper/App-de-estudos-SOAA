@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520" font-family="Segoe UI, sans-serif">
+  <defs>
+    <linearGradient id="lay1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#28205e"/>
+      <stop offset="1" stop-color="#1b2448"/>
+    </linearGradient>
+    <linearGradient id="lay2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#152f37"/>
+      <stop offset="1" stop-color="#11243c"/>
+    </linearGradient>
+    <linearGradient id="lay3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7f73e7"/>
+      <stop offset="1" stop-color="#5f52c7"/>
+    </linearGradient>
+    <linearGradient id="in2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1c2e"/>
+      <stop offset="1" stop-color="#0b1624"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="980" height="520" fill="#08111f"/>
+  <ellipse cx="120" cy="0" rx="360" ry="160" fill="#101d2d"/>
+
+  <g transform="translate(30 26)">
+    <text font-size="20" font-weight="800" fill="#eff6ff">Arquitetura · local-first</text>
+    <text y="26" font-size="12" fill="#93a5bd">tudo roda no seu computador — front conversa com o backend Rust via invoke (IPC local)</text>
+  </g>
+
+  <!-- layer 1: client -->
+  <g transform="translate(30 86)">
+    <rect width="290" height="150" rx="16" fill="url(#lay1)" stroke="#3d4690"/>
+    <text x="20" y="28" font-size="13" font-weight="800" fill="#e6effc">React 19 · TypeScript</text>
+    <text x="20" y="46" font-size="10.5" fill="#93a5bd">src/client · tema dark · Vite 8</text>
+    <g font-size="10.5">
+      <rect x="20" y="60" width="250" height="24" rx="7" fill="#0d1b2d" stroke="#26405f"/>
+      <text x="34" y="76" fill="#c9d6e5">App.tsx · 11 visões (abas)</text>
+      <rect x="20" y="90" width="250" height="24" rx="7" fill="#0d1b2d" stroke="#26405f"/>
+      <text x="34" y="106" fill="#c9d6e5">Ranking · Foco · Rota · Retenção</text>
+      <rect x="20" y="120" width="250" height="24" rx="7" fill="#0d1b2d" stroke="#26405f"/>
+      <text x="34" y="136" fill="#c9d6e5">Recharts 3 · lucide-react · zod</text>
+    </g>
+  </g>
+
+  <!-- layer 2: core -->
+  <g transform="translate(360 86)">
+    <rect width="290" height="150" rx="16" fill="url(#lay2)" stroke="#31536a"/>
+    <text x="20" y="28" font-size="13" font-weight="800" fill="#e6effc">Backend Tauri · Rust</text>
+    <text x="20" y="46" font-size="10.5" fill="#93a5bd">src-tauri · comandos #[tauri::command]</text>
+    <g font-size="10.5">
+      <rect x="20" y="60" width="250" height="24" rx="7" fill="#0b1523" stroke="#26405f"/>
+      <text x="34" y="76" fill="#c9d6e5">lib.rs · camada de comandos</text>
+      <rect x="20" y="90" width="250" height="24" rx="7" fill="#0b1523" stroke="#26405f"/>
+      <text x="34" y="106" fill="#c9d6e5">scheduler · planner · FSRS</text>
+      <rect x="20" y="120" width="250" height="24" rx="7" fill="#0b1523" stroke="#26405f"/>
+      <text x="34" y="136" fill="#c9d6e5">retenção · relatórios · buffer</text>
+    </g>
+  </g>
+
+  <!-- layer 3: data -->
+  <g transform="translate(690 86)">
+    <rect width="260" height="150" rx="16" fill="url(#lay3)"/>
+    <text x="20" y="28" font-size="13" font-weight="800" fill="#fff">SQLite (rusqlite)</text>
+    <text x="20" y="46" font-size="10.5" fill="#e9e6ff">dados locais · migrations · WAL</text>
+    <g font-size="10.5">
+      <rect x="20" y="60" width="220" height="24" rx="7" fill="#0000002e" stroke="#ffffff2e"/>
+      <text x="34" y="76" fill="#fff">matérias · tópicos · materiais</text>
+      <rect x="20" y="90" width="220" height="24" rx="7" fill="#0000002e" stroke="#ffffff2e"/>
+      <text x="34" y="106" fill="#fff">sessões de foco · desempenho</text>
+      <rect x="20" y="120" width="220" height="24" rx="7" fill="#0000002e" stroke="#ffffff2e"/>
+      <text x="34" y="136" fill="#fff">FSRS · alocações · buffer</text>
+    </g>
+  </g>
+
+  <!-- invoke arrows -->
+  <g stroke="#7f73e7" stroke-width="2">
+    <path d="M320 150 C 340 150 340 150 360 150" fill="none" marker-end="url(#arw)"/>
+    <path d="M650 150 C 670 150 670 150 690 150" fill="none" marker-end="url(#arw)"/>
+  </g>
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7f73e7"/>
+    </marker>
+  </defs>
+  <g font-size="10" fill="#b9b1ff">
+    <text x="322" y="138">invoke</text>
+    <text x="656" y="138">invoke</text>
+    <text x="668" y="282" font-size="10.5" fill="#8195ad">modo demo bypassa o backend — dados determinísticos de src/client/demo.ts</text>
+  </g>
+
+  <!-- shared types -->
+  <g transform="translate(30 286)">
+    <rect width="290" height="86" rx="14" fill="url(#in2)" stroke="#213148"/>
+    <text x="20" y="26" font-size="12" font-weight="700" fill="#d7e2f0">src/shared · types.ts</text>
+    <text x="20" y="46" font-size="10.5" fill="#93a5bd">contratos compartilhados entre cliente e backend</text>
+    <text x="20" y="64" font-size="10.5" fill="#22d3ee">Subject · PlanResponse · RetentionOverview · …</text>
+  </g>
+
+  <!-- engines -->
+  <g transform="translate(360 286)">
+    <rect width="290" height="86" rx="14" fill="url(#in2)" stroke="#213148"/>
+    <text x="20" y="26" font-size="12" font-weight="700" fill="#d7e2f0">Motor de memória · FSRS/Ebbinghaus</text>
+    <text x="20" y="46" font-size="10.5" fill="#93a5bd">Stability (S) · Retrievability (R) · ponto ótimo de revisão</text>
+    <text x="20" y="64" font-size="10.5" fill="#55e6aa">implementado e testado em Rust 📐</text>
+  </g>
+
+  <!-- demo -->
+  <g transform="translate(690 286)">
+    <rect width="260" height="86" rx="14" fill="url(#in2)" stroke="#3b3f6a"/>
+    <text x="20" y="26" font-size="12" font-weight="700" fill="#d7e2f0">Modo demo · pré-visualização</text>
+    <text x="20" y="46" font-size="10.5" fill="#93a5bd">catálogo de provas + dados sintéticos</text>
+    <text x="20" y="64" font-size="10.5" fill="#ffca76">ITA · IME · ENEM · Ensino Médio</text>
+  </g>
+
+  <!-- pipeline -->
+  <g transform="translate(30 410)">
+    <g font-size="11">
+      <rect x="0" y="-18" width="188" height="38" rx="12" fill="#1d453925" stroke="#2f8f6a59"/>
+      <text x="16" y="8" font-weight="800" fill="#a7f3d0">cargo test</text>
+      <text x="16" y="22" font-size="9.5" fill="#8195ad">Rust · FSRS/retenção/demo</text>
+      <rect x="204" y="-18" width="180" height="38" rx="12" fill="#2e3156" stroke="#45497e"/>
+      <text x="220" y="8" font-weight="800" fill="#e6e3ff">vitest + coverage 100%</text>
+      <text x="220" y="22" font-size="9.5" fill="#8195ad">React · TDD · jsdom</text>
+      <rect x="400" y="-18" width="180" height="38" rx="12" fill="#563c1d3d" stroke="#86693c66"/>
+      <text x="416" y="8" font-weight="800" fill="#ffe6a3">npm run package</text>
+      <text x="416" y="22" font-size="9.5" fill="#8195ad">Windows · Linux · macOS</text>
+      <rect x="596" y="-18" width="188" height="38" rx="12" fill="#5e223044" stroke="#a040525c"/>
+      <text x="612" y="8" font-weight="800" fill="#ffb9c4">100% offline</text>
+      <text x="612" y="22" font-size="9.5" fill="#8195ad">sem cloud · sem analytics</text>
+    </g>
+  </g>
+</svg>

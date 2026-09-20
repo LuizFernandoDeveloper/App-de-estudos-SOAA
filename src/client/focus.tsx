@@ -16,17 +16,13 @@ import {
   X
 } from "lucide-react";
 import { api } from "./api";
-import {
-  demoBrainDumps,
-  demoPomodoroSessions,
-  demoTimedboxes
-} from "./demo";
+import { demoBrainDumps, demoFocusSessions, demoSubjects, timeboxSuggestionFor } from "./demo";
 import type {
   BrainDumpLog,
   EarlyExitReason,
   FocusGoalType,
-  PomodoroSession,
-  PomodoroSessionInput,
+  FocusSession,
+  FocusSessionInput,
   SessionSummary,
   StudyMaterial,
   Subject,
@@ -49,6 +45,38 @@ const formatMinutes = (value: number) => {
   return m ? `${h}h ${m}m` : `${h}h`;
 };
 
+const MANY_PARTIALS_THRESHOLD = 3;
+
+let beepContext: AudioContext | null = null;
+
+function playAlert() {
+  try {
+    const AudioCls = (window as unknown as { AudioContext?: typeof AudioContext }).AudioContext
+      ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCls) return;
+    beepContext ??= new AudioCls();
+    if (beepContext.state === "suspended") void beepContext.resume();
+    const context = beepContext;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 880;
+    oscillator.type = "square";
+    gain.gain.setValueAtTime(0.001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.6);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.65);
+  } catch (error) {
+    void error;
+  }
+}
+
+const partialCountFor = (subjectId: number, sessions: FocusSession[]) =>
+  sessions.filter((session) => session.subjectId === subjectId && session.status === "partial").length;
+
+
 const EXIT_REASONS: Array<{ id: EarlyExitReason; label: string }> = [
   { id: "fadiga_metabolica", label: "Fadiga metabólica" },
   { id: "distracao_externa", label: "Distração externa" },
@@ -63,13 +91,11 @@ const STATUS_LABEL: Record<string, string> = {
   buffered: "Buffer"
 };
 
-const FOCUS_ZONES = [
-  { id: "green", label: "Verde", hint: "Deep work concluído (≥100%) — regime de absorção plena." },
-  { id: "amber", label: "Amarela", hint: "Bloqueio parcial (60–99%) — terminou abaixo do planejado." },
-  { id: "red", label: "Vermelha", hint: "Crítico (<60%) — saída precoce; retome o tópico em breve." }
-] as const;
-type FocusZoneId = (typeof FOCUS_ZONES)[number]["id"];
-const focusZoneOf = (rate: number): FocusZoneId => (rate >= 100 ? "green" : rate >= 60 ? "amber" : "red");
+const ZONE_META: Record<string, { label: string; hint: string; className: string }> = {
+  baixa: { label: "Verde", hint: "Deep work concluído (≥100%) — regime de absorção plena.", className: "good" },
+  media: { label: "Amarela", hint: "Bloqueio parcial (60–99%) — terminou abaixo do planejado.", className: "needs-work" },
+  alta: { label: "Vermelha", hint: "Crítico (<60%) — saída precoce; retome o tópico em breve.", className: "muted-text" }
+};
 
 
 type SetupForm = {
@@ -117,22 +143,43 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
   const [pendingExit, setPendingExit] = useState<EarlyExitReason | null>(null);
   const [mastery, setMastery] = useState(100);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
-  const [sessions, setSessions] = useState<PomodoroSession[]>(demo ? demoPomodoroSessions : []);
-  const [dumps, setDumps] = useState<BrainDumpLog[]>(demo ? demoBrainDumps : []);
-  const [suggestions, setSuggestions] = useState<TimeboxSuggestion[]>(demo ? demoTimedboxes : []);
+  const [sessions, setSessions] = useState<FocusSession[]>([]);
+  const [dumps, setDumps] = useState<BrainDumpLog[]>([]);
+  const [suggestions, setSuggestions] = useState<TimeboxSuggestion[]>([]);
 
   const suggestionFor = (subjectId: number) =>
     suggestions.find((s) => s.subjectId === subjectId);
 
+  useEffect(() => {
+    if (demo) {
+      setSessions(demoFocusSessions);
+      setDumps(demoBrainDumps);
+      setSuggestions(demoSubjects.map((subject) => timeboxSuggestionFor(subject)));
+      return;
+    }
+    let cancelled = false;
+    api.listFocusSessions().then((data) => { if (!cancelled) setSessions(data); }).catch(() => void 0);
+    api.listBrainDumps().then((data) => { if (!cancelled) setDumps(data); }).catch(() => void 0);
+    return () => { cancelled = true; };
+  }, [demo]);
+
   const selectSubject = (subjectId: number) => {
     const subject = subjects.find((s) => s.id === subjectId);
     if (!subject) return;
-    if (!demo && !suggestionFor(subjectId)) {
+    if (partialCountFor(subjectId, sessions) >= MANY_PARTIALS_THRESHOLD) playAlert();
+    if (demo) {
+      const suggestion = timeboxSuggestionFor(subject);
+      setSuggestions((prev) => [...prev.filter((s) => s.subjectId !== subjectId), suggestion]);
+      setForm((prev) => ({ ...emptySetup(suggestion.suggestedMinutes), subjectId }));
+      return;
+    }
+    const existing = suggestionFor(subjectId);
+    if (!existing) {
       api.getFocusTimebox(subjectId)
         .then((data) => setSuggestions((prev) => [...prev.filter((s) => s.subjectId !== subjectId), data]))
         .catch(() => void 0);
     }
-    const next = suggestionFor(subjectId)?.suggestedMinutes ?? form.plannedMinutes;
+    const next = existing?.suggestedMinutes ?? form.plannedMinutes;
     setForm((prev) => ({ ...emptySetup(next), subjectId }));
   };
 
@@ -175,6 +222,7 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
     if (active.elapsedSeconds >= active.plannedMinutes * 60) {
       setMastery(100);
       setCompletionOpen(true);
+      playAlert();
     }
   }, [active?.elapsedSeconds]);
 
@@ -182,7 +230,14 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
     const note = draft.trim();
     if (!note) return;
     if (demo) {
-      setDumps((prev) => [{ id: -(prev.length + 1), subjectId: active?.subject.id ?? null, subjectName: active?.subject.name ?? null, note, createdAt: new Date().toISOString() }, ...prev]);
+      const record: BrainDumpLog = {
+        id: Math.max(0, ...dumps.map((d) => d.id)) + 1,
+        subjectId: active?.subject.id ?? null,
+        subjectName: active?.subject.name ?? null,
+        note,
+        createdAt: new Date().toISOString().slice(0, 10)
+      };
+      setDumps((prev) => [record, ...prev]);
     } else {
       api.logBrainDump({ subjectId: active?.subject.id ?? null, note })
         .then((record) => setDumps((prev) => [record, ...prev]))
@@ -194,64 +249,68 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
 
   const finish = async (exitReason: EarlyExitReason | null) => {
     if (!active) return;
-    const input: PomodoroSessionInput = {
-      subjectId: active.subject.id,
-      materialId: active.material?.id ?? null,
-      goalType: active.goalType,
-      goalText: active.goalText,
-      pageStart: active.pageStart,
-      pageEnd: active.pageEnd,
-      plannedMinutes: active.plannedMinutes,
-      elapsedMinutes: Math.min(active.plannedMinutes, Math.round(active.elapsedSeconds / 60) || 1),
-      interrupts: active.interrupts,
-      exitReason,
-      completionPercentage: mastery,
-      startedAt: active.startedAt
-    };
     if (demo) {
-      const subject = active.subject;
-      const completed = input.elapsedMinutes >= input.plannedMinutes || exitReason === "meta_concluida";
-      const session: PomodoroSession = {
-        id: -(sessions.length + 1),
-        subjectId: subject.id,
-        subjectName: subject.name,
-        color: subject.color,
-        materialId: input.materialId,
+      const localSubject = active.subject;
+      const elapsedMinutes = Math.min(active.plannedMinutes, Math.round(active.elapsedSeconds / 60) || 1);
+      const rate = Math.min(100, Math.max(10, Math.round(active.elapsedSeconds / Math.max(1, active.plannedMinutes * 60) * 100)));
+      const record: FocusSession = {
+        id: Math.max(0, ...sessions.map((s) => s.id)) + 1,
+        subjectId: localSubject.id,
+        subjectName: localSubject.name,
+        color: localSubject.color,
+        materialId: active.material?.id ?? null,
         materialTitle: active.material?.title ?? null,
-        goalType: input.goalType,
-        goalText: input.goalText,
-        pageStart: input.pageStart,
-        pageEnd: input.pageEnd,
-        plannedMinutes: input.plannedMinutes,
-        elapsedMinutes: input.elapsedMinutes,
-        interrupts: input.interrupts,
-        completionRate: Math.round(input.elapsedMinutes / input.plannedMinutes * 100),
-        exitReason: input.exitReason,
-        completed,
-        status: completed ? "done" : "partial",
-        completionPercentage: input.completionPercentage,
-        startedAt: input.startedAt
+        goalType: active.goalType,
+        goalText: active.goalText,
+        pageStart: active.pageStart,
+        pageEnd: active.pageEnd,
+        plannedMinutes: active.plannedMinutes,
+        elapsedMinutes,
+        interrupts: active.interrupts,
+        completionRate: rate,
+        zone: rate >= 100 ? "baixa" : rate >= 60 ? "media" : "alta",
+        exitReason,
+        completed: true,
+        status: rate >= 100 ? "done" : "partial",
+        completionPercentage: mastery,
+        startedAt: active.startedAt
       };
-      setSessions((prev) => [session, ...prev]);
+      const suggestion = timeboxSuggestionFor(localSubject);
+      setSessions((prev) => [record, ...prev]);
       setSummary({
-        subjectId: subject.id,
-        subjectName: subject.name,
-        plannedMinutes: input.plannedMinutes,
-        elapsedMinutes: input.elapsedMinutes,
-        interrupts: input.interrupts,
-        completionRate: session.completionRate,
-        exitReason: input.exitReason,
-        completionPercentage: input.completionPercentage,
-        deepWork: completed && input.interrupts === 0 && input.exitReason === null,
-        suggestedNext: input.plannedMinutes,
-        suggestionReason: "Demonstração: a sustentação segura evolui o bloco em +5 min.",
+        subjectId: localSubject.id,
+        subjectName: localSubject.name,
+        plannedMinutes: active.plannedMinutes,
+        elapsedMinutes,
+        interrupts: active.interrupts,
+        completionRate: rate,
+        exitReason,
+        completionPercentage: mastery,
+        deepWork: active.interrupts === 0 && rate >= 100,
+        suggestedNext: suggestion.suggestedMinutes,
+        suggestionReason: suggestion.reason,
         efficiencyGain: null
       });
+      setSuggestions((prev) => [...prev.filter((s) => s.subjectId !== localSubject.id), suggestion]);
     } else {
+      const input: FocusSessionInput = {
+        subjectId: active.subject.id,
+        materialId: active.material?.id ?? null,
+        goalType: active.goalType,
+        goalText: active.goalText,
+        pageStart: active.pageStart,
+        pageEnd: active.pageEnd,
+        plannedMinutes: active.plannedMinutes,
+        elapsedMinutes: Math.min(active.plannedMinutes, Math.round(active.elapsedSeconds / 60) || 1),
+        interrupts: active.interrupts,
+        exitReason,
+        completionPercentage: mastery,
+        startedAt: active.startedAt
+      };
       try {
-        const next = await api.completePomodoroSession(input);
+        const next = await api.completeFocusSession(input);
         setSummary(next);
-        setSessions(await api.listPomodoroSessions());
+        setSessions(await api.listFocusSessions());
         api.getFocusTimebox(active.subject.id)
           .then((data) => setSuggestions((prev) => [...prev.filter((s) => s.subjectId !== active.subject.id), data]))
           .catch(() => void 0);
@@ -311,7 +370,7 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
         <section className="card table-card">
           <div className="section-heading"><div><p className="eyebrow">Histórico de foco</p><h2>Sessões registradas</h2></div></div>
           <div className="table-wrap"><table>
-            <thead><tr><th>Matéria · meta</th><th>Status</th><th>Planejado</th><th>Executado</th><th>% bloqueio</th><th>Motivo</th></tr></thead>
+            <thead><tr><th>Matéria · meta</th><th>Status</th><th>Planejado</th><th>Executado</th><th>% bloqueio</th><th>Zona</th><th>Motivo</th></tr></thead>
             <tbody>
               {sessions.slice(0, 20).map((session) => (
                 <tr key={session.id}>
@@ -319,7 +378,8 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
                   <td><span className={`focus-status ${session.status}`}>{STATUS_LABEL[session.status]}</span></td>
                   <td>{formatMinutes(session.plannedMinutes)}</td>
                   <td>{formatMinutes(session.elapsedMinutes)}</td>
-                  <td><span className={session.completionRate >= 100 ? "good" : session.completionRate >= 60 ? "needs-work" : "muted-text"}>{session.completionRate}%</span></td>
+                  <td><span className={ZONE_META[session.zone]?.className ?? "muted-text"}>{session.completionRate}%</span></td>
+                  <td>{ZONE_META[session.zone] ? <span title={ZONE_META[session.zone].hint}>{ZONE_META[session.zone].label}</span> : <span className="muted-text">—</span>}</td>
                   <td>{session.exitReason ? EXIT_REASONS.find((r) => r.id === session.exitReason)?.label : <span className="muted-text">—</span>}</td>
                 </tr>
               ))}
@@ -349,13 +409,18 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
             <div className="modal-body focus-setup">
               <label className="field-label">Matéria</label>
               <div className="subject-grid">
-                {subjects.map((subject) => (
-                  <button key={subject.id} className={`subject-tile ${form.subjectId === subject.id ? "active" : ""}`} style={{ borderColor: form.subjectId === subject.id ? `var(--${subject.color})` : undefined }} onClick={() => selectSubject(subject.id)}>
+                {subjects.map((subject) => {
+                  const partials = partialCountFor(subject.id, sessions);
+                  const onAlert = partials >= MANY_PARTIALS_THRESHOLD;
+                  return (
+                  <button key={subject.id} className={`subject-tile ${form.subjectId === subject.id ? "active" : ""} ${onAlert ? "on-alert" : ""}`} style={{ borderColor: form.subjectId === subject.id ? `var(--${subject.color})` : undefined }} onClick={() => selectSubject(subject.id)}>
                     <span className="color-dot" style={{ background: `var(--${subject.color})` }} />
                     {subject.name.split("·")[0].trim()}
                     {suggestionFor(subject.id) && <small>{suggestionFor(subject.id)!.suggestedMinutes} min</small>}
+                    {onAlert && <small className="alert-chip" title={`${partials} blocos parciais — tempo de aprendizado fragmentado`}>⚠ {partials} parciais</small>}
                   </button>
-                ))}
+                  );
+                })}
               </div>
               {form.subjectId && suggestionFor(form.subjectId) && (
                 <div className="cog-alert"><Gauge size={16} /><div><strong>Sugestão de sobrecarga progressiva:</strong><span>{suggestionFor(form.subjectId)!.reason}</span></div></div>

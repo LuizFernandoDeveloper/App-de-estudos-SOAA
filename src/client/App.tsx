@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
+  Activity,
   AlertCircle,
   AlertTriangle,
-  ArrowRight,
   BarChart3,
   BookOpen,
   BrainCircuit,
@@ -10,6 +10,7 @@ import {
   CalendarCheck,
   CalendarDays,
   CheckCircle2,
+  ClipboardCheck,
   Clock3,
   Crown,
   FolderPlus,
@@ -19,6 +20,7 @@ import {
   Pencil,
   Plus,
   Save,
+  Settings,
   SlidersHorizontal,
   Sparkles,
   Target,
@@ -46,15 +48,37 @@ import {
   YAxis
 } from "recharts";
 import { api, type MaterialInput, type QuestionResultInput, type SubjectInput } from "./api";
-import { buildMemoryDecayProjection, demoDashboard, demoDayAllocations, demoFilteredTrend, demoFocusOverloadTrend, demoMaterialList, demoMemoryItems, demoPlan, demoRanking, demoRetentionOverview, demoSchedule, demoSubjectAccuracyTrend, demoSubjects, demoTopicList } from "./demo";
+import { color, COLOR_OPTIONS } from "./colors";
+import { PlanWizard } from "./wizard";
+import { RescheduleTriagePanel } from "./triage";
+import { CATALOG_GROUPS, CATALOG_GROUP_HINTS, CATALOG_GROUP_LABELS, catalogSubjects, type CatalogGroup } from "./catalog";
+import {
+  addDaysIso,
+  buildMemoryDecayProjection,
+  demoDashboard,
+  demoDayAllocations,
+  demoFilteredTrend,
+  demoFocusOverloadTrend,
+  demoMaterialList,
+  demoMemoryItems,
+  demoProfile,
+  demoRanking,
+  demoRetentionLivestream,
+  demoRetentionOverview,
+  demoMaterialStrategies,
+  demoSchedule,
+  demoSubjects,
+  demoSubjectAccuracyTrend,
+  demoTopicList
+} from "./demo";
 import { CognitiveCharts } from "./cognitive";
 import { RetentionGraphBoard } from "./retention";
 import { AdvancementView } from "./advancement";
 import { RankingView } from "./ranking";
 import { FocusTimerView } from "./focus";
-import { RescheduleTriagePanel } from "./triage";
 import { CustomTitleBar } from "./TitleBar";
 import type {
+  ConsolidatedPerformanceReport,
   DashboardData,
   DayAllocation,
   FocusOverloadPoint,
@@ -64,11 +88,9 @@ import type {
   MemoryItemInput,
   PerformanceGranularity,
   PerformancePoint,
-  PlanDay,
-  PlanFocus,
-  PlanInput,
-  PlanResponse,
   Profile,
+  RetentionLiveStream,
+  RetentionLiveTick,
   ReviewGrade,
   RetentionOverview,
   ScheduleResponse,
@@ -83,18 +105,6 @@ import type {
 type View = "inicio" | "matriz" | "planejamento" | "foco" | "desempenho" | "biblioteca" | "avanco" | "ranking";
 type Toast = { tone: "success" | "error"; message: string } | null;
 
-const COLOR_HEX: Record<string, string> = {
-  indigo: "#818cf8",
-  violet: "#a78bfa",
-  cyan: "#22d3ee",
-  pink: "#f472b6",
-  amber: "#fbbf24",
-  emerald: "#34d399",
-  orange: "#fb923c",
-  blue: "#60a5fa"
-};
-
-const COLOR_OPTIONS = Object.keys(COLOR_HEX);
 const WEEKDAY_NAMES = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 const today = () => new Date().toISOString().slice(0, 10);
 const minutes = (value: number) => {
@@ -104,7 +114,7 @@ const minutes = (value: number) => {
   return m ? `${h}h ${m}m` : `${h}h`;
 };
 
-const initialProfile: Profile = { dailyHours: 6, weeklyDays: 6, examTrack: "ITA", startDate: null, examDate: null };
+const initialProfile: Profile = { dailyHours: 6, weeklyDays: 6, examTrack: "ITA", startDate: null, examDate: null, studyDays: [0, 1, 2, 3, 4, 5] };
 const emptyMaterial: MaterialInput = {
   subjectId: null,
   topicId: null,
@@ -135,7 +145,6 @@ export default function App() {
   const [subjectEditor, setSubjectEditor] = useState<Subject | null | undefined>(undefined);
   const [materialEditor, setMaterialEditor] = useState<boolean>(false);
   const [questionEditor, setQuestionEditor] = useState(false);
-  const [demoMode, setDemoMode] = useState(false);
   const [granularity, setGranularity] = useState<PerformanceGranularity>("day");
   const [trend, setTrend] = useState<PerformancePoint[]>([]);
   const [trendSubjectId, setTrendSubjectId] = useState<number | null>(null);
@@ -147,13 +156,31 @@ export default function App() {
   const [memorySelected, setMemorySelected] = useState<number | null>(null);
   const [memoryProjection, setMemoryProjection] = useState<MemoryDecayProjection | null>(null);
   const [retentionOverview, setRetentionOverview] = useState<RetentionOverview | null>(null);
+  const [livestream, setLivestream] = useState<RetentionLiveStream | null>(null);
+  const [report, setReport] = useState<ConsolidatedPerformanceReport | null>(null);
+  const [demoMode, setDemoMode] = useState(false);
+  const [configMenu, setConfigMenu] = useState(false);
 
   const notify = (message: string, tone: "success" | "error" = "success") => {
     setToast({ message, tone });
     window.setTimeout(() => setToast(null), 3600);
   };
 
+  const applyDemoState = () => {
+    setSubjects(demoSubjects);
+    setProfile(demoProfile);
+    setDashboard(demoDashboard);
+    setMaterials(demoMaterialList);
+    setTopics(demoTopicList);
+    setRanking(demoRanking);
+    setSchedule(demoSchedule);
+  };
+
   const recalculate = async (hours = profile.dailyHours) => {
+    if (demoMode) {
+      setSchedule(demoSchedule);
+      return;
+    }
     try {
       const next = await api.calculateSchedule(hours);
       setSchedule(next);
@@ -166,20 +193,31 @@ export default function App() {
   const loadApp = async () => {
     setLoading(true);
     try {
-      const [nextSubjects, nextProfile, nextDashboard, nextMaterials, nextTopics] = await Promise.all([
-        api.listSubjects(),
-        api.getProfile(),
-        api.getDashboard(),
-        api.listMaterials(),
-        api.listTopics()
-      ]);
-      setSubjects(nextSubjects);
-      setProfile(nextProfile);
-      setDashboard(nextDashboard);
-      setMaterials(nextMaterials);
-      setTopics(nextTopics);
-      setRanking(await api.getPriorityRanking());
-      if (nextSubjects.length) setSchedule(await api.calculateSchedule(nextProfile.dailyHours));
+      if (demoMode) {
+        applyDemoState();
+        setAllocations(demoDayAllocations);
+        setMemoryItems(demoMemoryItems);
+        setMemorySelected((previous) => previous ?? demoMemoryItems[0]?.id ?? null);
+        setSubjectTrend(demoSubjectAccuracyTrend);
+        setFocusTrend(demoFocusOverloadTrend);
+        setTrend(demoFilteredTrend(granularity, trendSubjectId, trendTopicId));
+        setRetentionOverview(demoRetentionOverview);
+      } else {
+        const [nextSubjects, nextProfile, nextDashboard, nextMaterials, nextTopics] = await Promise.all([
+          api.listSubjects(),
+          api.getProfile(),
+          api.getDashboard(),
+          api.listMaterials(),
+          api.listTopics()
+        ]);
+        setSubjects(nextSubjects);
+        setProfile(nextProfile);
+        setDashboard(nextDashboard);
+        setMaterials(nextMaterials);
+        setTopics(nextTopics);
+        setRanking(await api.getPriorityRanking());
+        if (nextSubjects.length) setSchedule(await api.calculateSchedule(nextProfile.dailyHours));
+      }
     } catch (error) {
       notify(`Não foi possível abrir os dados locais: ${String(error)}`, "error");
     } finally {
@@ -192,15 +230,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
     if (demoMode) {
-      setTrend(demoFilteredTrend(granularity, trendSubjectId, trendTopicId));
-      setSubjectTrend([]);
-      setFocusTrend(demoFocusOverloadTrend);
       setMemoryItems(demoMemoryItems);
       setMemorySelected((previous) => previous ?? demoMemoryItems[0]?.id ?? null);
+      setTrend(demoFilteredTrend(granularity, trendSubjectId, trendTopicId));
+      setSubjectTrend(demoSubjectAccuracyTrend);
+      setFocusTrend(demoFocusOverloadTrend);
+      setAllocations(demoDayAllocations);
       return;
     }
+    let cancelled = false;
     api.listMemoryItems()
       .then((data) => { if (!cancelled) setMemoryItems(data); if (!cancelled && !memorySelected && data.length) setMemorySelected(data[0].id); })
       .catch(() => { if (!cancelled) setMemoryItems([]); });
@@ -217,7 +256,7 @@ export default function App() {
       .then((data) => { if (!cancelled) setAllocations(data); })
       .catch(() => { if (!cancelled) setAllocations([]); });
     return () => { cancelled = true; };
-  }, [granularity, demoMode, dashboard, trendSubjectId, trendTopicId]);
+  }, [granularity, dashboard, trendSubjectId, trendTopicId, demoMode]);
 
   useEffect(() => {
     if (!memorySelected) {
@@ -225,7 +264,7 @@ export default function App() {
       return;
     }
     if (demoMode) {
-      const item = memoryItems.find((entry) => entry.id === memorySelected) ?? demoMemoryItems.find((entry) => entry.id === memorySelected) ?? null;
+      const item = memoryItems.find((entry) => entry.id === memorySelected);
       setMemoryProjection(item ? buildMemoryDecayProjection(item) : null);
       return;
     }
@@ -234,27 +273,74 @@ export default function App() {
       .then((data) => { if (!cancelled) setMemoryProjection(data); })
       .catch(() => { if (!cancelled) setMemoryProjection(null); });
     return () => { cancelled = true; };
-  }, [memorySelected, demoMode, memoryItems]);
+  }, [memorySelected, memoryItems, demoMode]);
 
   useEffect(() => {
-    let cancelled = false;
     if (demoMode) {
       setRetentionOverview(demoRetentionOverview);
       return;
     }
+    let cancelled = false;
     api.getRetentionOverview()
       .then((data) => { if (!cancelled) setRetentionOverview(data); })
       .catch(() => { if (!cancelled) setRetentionOverview(null); });
     return () => { cancelled = true; };
-  }, [demoMode, memoryItems]);
+  }, [memoryItems, demoMode]);
+
+  useEffect(() => {
+    if (demoMode) {
+      setLivestream(demoRetentionLivestream[0] ?? null);
+      setReport(null);
+      return;
+    }
+    let cancelled = false;
+    api.getPerformanceLivestream()
+      .then((data) => { if (!cancelled) setLivestream(data); })
+      .catch(() => { if (!cancelled) setLivestream(null); });
+    api.getConsolidatedReport()
+      .then((data) => { if (!cancelled) setReport(data); })
+      .catch(() => { if (!cancelled) setReport(null); });
+    return () => { cancelled = true; };
+  }, [demoMode]);
 
   const selectMemoryItem = (id: number) => setMemorySelected(id);
 
   const createMemoryItem = async (input: MemoryItemInput) => {
-    try {
-      if (demoMode) {
-        return;
+    if (demoMode) {
+      const ids = memoryItems.map((item) => item.id);
+      const nextId = (ids.length ? Math.max(...ids) : 0) + 1;
+      let topicName: string | null = null;
+      let color = "blue";
+      let subjectName: string | null = null;
+      if (input.subjectId) {
+        const subject = subjects.find((item) => item.id === input.subjectId);
+        subjectName = subject?.name ?? null;
+        color = subject?.color ?? "blue";
+        if (input.topicId) topicName = topics.find((topic) => topic.id === input.topicId)?.name ?? null;
       }
+      const created: SpacedRepetitionItem = {
+        id: nextId,
+        userId: 1,
+        subjectId: input.subjectId ?? null,
+        subjectName,
+        color,
+        topicId: input.topicId ?? null,
+        topicName,
+        concept: input.concept,
+        difficulty: input.difficulty ?? 5,
+        stability: 5,
+        reps: 0,
+        lastReviewDate: today(),
+        dueDate: addDaysIso(5),
+        retrievability: 1,
+        createdAt: today()
+      };
+      setMemoryItems((previous) => [...previous, created]);
+      setMemorySelected(created.id);
+      notify("Item de memória adicionado à fila de revisão (demo).");
+      return;
+    }
+    try {
       const created = await api.createMemoryItem(input);
       setMemoryItems(await api.listMemoryItems());
       setMemorySelected(created.id);
@@ -266,15 +352,13 @@ export default function App() {
 
   const deleteMemoryItem = async (id: number) => {
     if (!window.confirm(`Remover o item de memória da fila de repetição?`)) return;
+    if (demoMode) {
+      setMemoryItems((previous) => previous.filter((item) => item.id !== id));
+      setMemorySelected((current) => (current === id ? null : current));
+      notify("Item removido da fila (demo).");
+      return;
+    }
     try {
-      if (demoMode) {
-        setMemoryItems((previous) => {
-          const next = previous.filter((item) => item.id !== id);
-          setMemorySelected(next[0]?.id ?? null);
-          return next;
-        });
-        return;
-      }
       await api.deleteMemoryItem(id);
       const next = await api.listMemoryItems();
       setMemoryItems(next);
@@ -286,16 +370,18 @@ export default function App() {
   };
 
   const reviewMemoryItem = async (id: number, grade: ReviewGrade) => {
+    if (demoMode) {
+      const multipliers: Record<ReviewGrade, number> = { again: 0.5, hard: 1.2, good: 1.8, easy: 2.4 };
+      setMemoryItems((previous) => previous.map((item) => {
+        if (item.id !== id) return item;
+        const stability = Math.min(120, Math.round(item.stability * multipliers[grade] * 10) / 10);
+        return { ...item, stability, reps: item.reps + 1, lastReviewDate: today(), dueDate: addDaysIso(Math.max(1, Math.round(stability))), retrievability: 1 };
+      }));
+      setMemorySelected(id);
+      notify("Revisão registrada — estabilidade rearmada (demo).");
+      return;
+    }
     try {
-      if (demoMode) {
-        setMemoryItems((previous) => previous.map((item) => {
-          if (item.id !== id) return item;
-          const multiplier = { again: 0.8, hard: 1.2, good: 2.2, easy: 3.0 }[grade];
-          const scale = 0.9 + (10 - Math.min(10, Math.max(1, item.difficulty))) * 0.02;
-          return { ...item, stability: Math.round(item.stability * multiplier * scale * 100) / 100, reps: item.reps + 1, lastReviewDate: today(), retrievability: 1, dueDate: "" };
-        }));
-        return;
-      }
       const updated = await api.reviewMemoryItem(id, grade);
       setMemoryItems((previous) => previous.map((item) => (item.id === id ? updated : item)));
       setMemoryProjection(await api.getMemoryDecay(id));
@@ -306,6 +392,10 @@ export default function App() {
   };
 
   const refreshSubjects = async () => {
+    if (demoMode) {
+      applyDemoState();
+      return;
+    }
     const nextSubjects = await api.listSubjects();
     setSubjects(nextSubjects);
     if (nextSubjects.length) await recalculate();
@@ -313,18 +403,70 @@ export default function App() {
     setDashboard(await api.getDashboard());
   };
 
+  const bulkAddSubjects = async (group: CatalogGroup) => {
+    const existingNames = new Set(subjects.map((subject) => subject.name));
+    const picks = catalogSubjects.filter((entry) => entry.group === group && !existingNames.has(entry.name));
+    if (!picks.length) {
+      notify("Nada novo nesse grupo — todas já estão na matriz.");
+      return;
+    }
+    if (demoMode) {
+      const nextId = Math.max(0, ...subjects.map((subject) => subject.id)) + 1;
+      const added = picks.map((entry, offset) => ({
+        id: nextId + offset,
+        userId: 1,
+        name: entry.name,
+        weight: entry.weight,
+        difficulty: entry.difficulty,
+        computedIp: entry.weight * entry.difficulty,
+        color: COLOR_OPTIONS[(nextId + offset) % COLOR_OPTIONS.length],
+        goalAccuracy: 70 + ((nextId + offset) % 21),
+        goalCoverage: 100,
+        currentLevel: 1,
+        targetLevel: 5,
+        createdAt: today()
+      }));
+      setSubjects((previous) => [...previous, ...added]);
+      setSchedule(demoSchedule);
+      notify(`${added.length} matéria(s) do grupo adicionada(s) à matriz (demo).`);
+      return;
+    }
+    try {
+      for (const entry of picks) {
+        await api.createSubject({ name: entry.name, weight: entry.weight, difficulty: entry.difficulty });
+      }
+      await refreshSubjects();
+      notify(`${picks.length} matéria(s) adicionada(s) à matriz.`);
+    } catch (error) {
+      notify(String(error), "error");
+    }
+  };
+
   const refreshAdvance = async () => {
+    if (demoMode) {
+      applyDemoState();
+      return;
+    }
     setTopics(await api.listTopics());
     setMaterials(await api.listMaterials());
     setDashboard(await api.getDashboard());
   };
 
   const reloadAllocations = async () => {
-    if (demoMode) return;
+    if (demoMode) {
+      setAllocations(demoDayAllocations);
+      return;
+    }
     setAllocations(await api.listDayAllocations());
   };
 
   const saveProfile = async () => {
+    if (demoMode) {
+      setSchedule(demoSchedule);
+      setDashboard(demoDashboard);
+      notify("Modo demo: carga de estudo simulada, nada foi gravado.");
+      return;
+    }
     try {
       const next = await api.updateProfile(profile);
       setProfile(next);
@@ -337,7 +479,11 @@ export default function App() {
   };
 
   const savePlan = async () => {
-    if (!schedule || demoMode) return;
+    if (!schedule) return;
+    if (demoMode) {
+      notify("Modo demo: planejamento simulado, nada foi gravado.");
+      return;
+    }
     try {
       await api.saveDailyLog(profile.dailyHours, schedule);
       notify("Planejamento de hoje salvo no histórico local.");
@@ -346,8 +492,33 @@ export default function App() {
     }
   };
 
+  const toggleDemo = () => {
+    const next = !demoMode;
+    setDemoMode(next);
+    setConfigMenu(false);
+    if (next) {
+      applyDemoState();
+      setAllocations(demoDayAllocations);
+      setMemoryItems(demoMemoryItems);
+      setMemorySelected((previous) => previous ?? demoMemoryItems[0]?.id ?? null);
+      setSubjectTrend(demoSubjectAccuracyTrend);
+      setFocusTrend(demoFocusOverloadTrend);
+      setTrend(demoFilteredTrend(granularity, trendSubjectId, trendTopicId));
+      setRetentionOverview(demoRetentionOverview);
+      notify("Modo demonstração ativo — dados fictícios, nada é gravado.");
+    } else {
+      void loadApp();
+    }
+  };
+
   const deleteSubject = async (subject: Subject) => {
     if (!window.confirm(`Remover “${subject.name}”? Materiais relacionados serão mantidos sem disciplina.`)) return;
+    if (demoMode) {
+      setSubjects((previous) => previous.filter((item) => item.id !== subject.id));
+      setSchedule(demoSchedule);
+      notify("Matéria removida (demo).");
+      return;
+    }
     try {
       await api.deleteSubject(subject.id);
       await refreshSubjects();
@@ -359,6 +530,11 @@ export default function App() {
 
   const deleteMaterial = async (material: StudyMaterial) => {
     if (!window.confirm(`Remover “${material.title}”?`)) return;
+    if (demoMode) {
+      setMaterials((previous) => previous.filter((item) => item.id !== material.id));
+      notify("Material removido (demo).");
+      return;
+    }
     try {
       await api.deleteMaterial(material.id);
       setMaterials(await api.listMaterials());
@@ -370,6 +546,11 @@ export default function App() {
   };
 
   const updateMaterialStatus = async (material: StudyMaterial, status: MaterialStatus) => {
+    if (demoMode) {
+      setMaterials((previous) => previous.map((item) => (item.id === material.id ? { ...item, status } : item)));
+      notify("Status do material atualizado (demo).");
+      return;
+    }
     try {
       await api.updateMaterial(material.id, { ...material, status });
       setMaterials(await api.listMaterials());
@@ -379,13 +560,8 @@ export default function App() {
     }
   };
 
-  const effectiveSchedule = demoMode ? demoSchedule : schedule;
-  const effectiveDashboard = demoMode ? demoDashboard : dashboard;
-  const effectiveSubjects = demoMode ? demoSubjects : subjects;
-  const effectiveTopics = demoMode ? demoTopicList : topics;
-  const effectiveMaterials = demoMode ? demoMaterialList : materials;
   const executed = new Map((dashboard?.subjectPerformance ?? []).map((item) => [item.subjectId, item.studiedMinutes]));
-  const focus = effectiveSchedule?.allocations[0];
+  const focus = schedule?.allocations[0];
   const weeklyMinutes = Math.round(profile.dailyHours * profile.weeklyDays * 60);
   const dailyData = dashboard?.dailyPerformance ?? [];
   const subjectData = dashboard?.subjectPerformance ?? [];
@@ -420,31 +596,38 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             <div className="load-chip"><Clock3 size={16} /><span>{profile.dailyHours}h/dia · {profile.weeklyDays} dias</span></div>
-            <button className={`button demo-toggle ${demoMode ? "active" : "secondary"}`} onClick={() => setDemoMode((value) => !value)} title="Pré-visualizar com dados fictícios">
-              <Sparkles size={16} /> {demoMode ? "Sair da demo" : "Ver demo"}
-            </button>
             <button className="button primary" onClick={() => setQuestionEditor(true)} disabled={!subjects.length}>
               <Plus size={17} /> Lançar questões
             </button>
+            <div className="config-wrap">
+              <button className={`icon-button ${demoMode ? "active" : ""}`} title="Configurações" aria-label="Configurações" onClick={() => setConfigMenu((open) => !open)}><Settings size={18} /></button>
+              {configMenu && <div className="config-menu">
+                <p className="config-menu-title">Configurações</p>
+                <button className={`config-trigger ${demoMode ? "active" : ""}`} onClick={toggleDemo}>
+                  <Sparkles size={17} />
+                  <span><strong>Modo demonstração</strong><small>{demoMode ? "Ativo — dados fictícios, nada é gravado" : "Inativo — usa seus dados reais"}</small></span>
+                </button>
+              </div>}
+            </div>
           </div>
         </header>
 
         {loading ? <Loading /> : <>
-          {view === "inicio" && <Overview dashboard={effectiveDashboard} schedule={effectiveSchedule} focus={focus} onNavigate={setView} />}
-          {view === "matriz" && <MatrixView schedule={effectiveSchedule} subjects={subjects} onAdd={() => setSubjectEditor(null)} onEdit={setSubjectEditor} onDelete={deleteSubject} />}
-          {view === "planejamento" && <PlanningView profile={profile} schedule={effectiveSchedule} weeklyMinutes={weeklyMinutes} demo={demoMode} subjects={effectiveSubjects} onProfile={setProfile} onSaveProfile={saveProfile} onSavePlan={savePlan} allocations={demoMode ? demoDayAllocations : allocations} />}
-          {view === "foco" && <FocusTimerView subjects={effectiveSubjects} materials={effectiveMaterials} demo={demoMode} />}
-          {view === "desempenho" && <PerformanceView dashboard={effectiveDashboard} trend={demoMode ? demoFilteredTrend(granularity, trendSubjectId, trendTopicId) : trend} granularity={granularity} onGranularity={setGranularity} onTrendFilter={(subjectId, topicId) => { setTrendSubjectId(subjectId); setTrendTopicId(topicId); }} trendSubjectId={trendSubjectId} trendTopicId={trendTopicId} onRecord={() => setQuestionEditor(true)} subjects={effectiveSubjects} topics={effectiveTopics} schedule={effectiveSchedule} executed={executed} points={demoMode ? demoSubjectAccuracyTrend : subjectTrend} focusPoints={demoMode ? demoFocusOverloadTrend : focusTrend} memoryItems={memoryItems} memoryProjection={demoMode ? (memoryProjection ?? buildMemoryDecayProjection(demoMemoryItems[0])) : memoryProjection} overview={retentionOverview} demo={demoMode} onMemorySelect={selectMemoryItem} onMemoryCreate={createMemoryItem} onMemoryDelete={deleteMemoryItem} onMemoryReview={reviewMemoryItem} />}
-          {view === "avanco" && <AdvancementView subjects={effectiveSubjects} topics={effectiveTopics} materials={effectiveMaterials} dashboard={effectiveDashboard} demo={demoMode} onChanged={refreshAdvance} />}
-          {view === "ranking" && <RankingView ranking={demoMode ? demoRanking : ranking} allocations={demoMode ? demoDayAllocations : allocations} demo={demoMode} onChanged={reloadAllocations} />}
-          {view === "biblioteca" && <LibraryView materials={materials} subjects={subjects} topics={topics} onAdd={() => setMaterialEditor(true)} onDelete={deleteMaterial} onStatus={updateMaterialStatus} />}
+          {view === "inicio" && <Overview dashboard={dashboard} schedule={schedule} focus={focus} onNavigate={setView} />}
+          {view === "matriz" && <MatrixView schedule={schedule} subjects={subjects} onAdd={() => setSubjectEditor(null)} onEdit={setSubjectEditor} onDelete={deleteSubject} onBulkAdd={bulkAddSubjects} />}
+          {view === "planejamento" && <PlanningView profile={profile} schedule={schedule} weeklyMinutes={weeklyMinutes} subjects={subjects} onProfile={setProfile} onSaveProfile={saveProfile} onSavePlan={savePlan} allocations={allocations} demo={demoMode} onSubjectAdded={(subject) => setSubjects((previous) => [...previous, subject])} />}
+          {view === "foco" && <FocusTimerView subjects={subjects} materials={materials} demo={demoMode} />}
+          {view === "desempenho" && <PerformanceView dashboard={dashboard} trend={trend} granularity={granularity} onGranularity={setGranularity} onTrendFilter={(subjectId, topicId) => { setTrendSubjectId(subjectId); setTrendTopicId(topicId); }} trendSubjectId={trendSubjectId} trendTopicId={trendTopicId} onRecord={() => setQuestionEditor(true)} subjects={subjects} topics={topics} schedule={schedule} executed={executed} points={subjectTrend} focusPoints={focusTrend} memoryItems={memoryItems} memoryProjection={memoryProjection} overview={retentionOverview} livestream={livestream} report={report} onMemorySelect={selectMemoryItem} onMemoryCreate={createMemoryItem} onMemoryDelete={deleteMemoryItem} onMemoryReview={reviewMemoryItem} />}
+          {view === "avanco" && <AdvancementView subjects={subjects} topics={topics} materials={materials} dashboard={dashboard} onChanged={refreshAdvance} demo={demoMode} />}
+          {view === "ranking" && <RankingView ranking={ranking} allocations={allocations} onChanged={reloadAllocations} demo={demoMode} />}
+          {view === "biblioteca" && <LibraryView materials={materials} subjects={subjects} topics={topics} onAdd={() => setMaterialEditor(true)} onDelete={deleteMaterial} onStatus={updateMaterialStatus} demo={demoMode} />}
         </>}
       </main>
 
       {toast && <div className={`toast ${toast.tone}`}><AlertCircle size={17} />{toast.message}</div>}
-      {subjectEditor !== undefined && <SubjectModal subject={subjectEditor ?? undefined} onClose={() => setSubjectEditor(undefined)} onSaved={async () => { await refreshSubjects(); setSubjectEditor(undefined); notify("Matriz atualizada."); }} />}
-      {materialEditor && <MaterialModal subjects={subjects} topics={topics} onClose={() => setMaterialEditor(false)} onSaved={async () => { setMaterials(await api.listMaterials()); setDashboard(await api.getDashboard()); setMaterialEditor(false); notify("Material adicionado à biblioteca."); }} />}
-      {questionEditor && <QuestionModal subjects={subjects} topics={effectiveTopics} onClose={() => setQuestionEditor(false)} onSaved={async () => { setDashboard(await api.getDashboard()); setRanking(await api.getPriorityRanking()); setQuestionEditor(false); notify("Desempenho registrado."); }} />}
+      {subjectEditor !== undefined && <SubjectModal subject={subjectEditor ?? undefined} onClose={() => setSubjectEditor(undefined)} onSaved={async () => { if (demoMode) applyDemoState(); else await refreshSubjects(); setSubjectEditor(undefined); notify("Matriz atualizada."); }} />}
+      {materialEditor && <MaterialModal subjects={subjects} topics={topics} onClose={() => setMaterialEditor(false)} onSaved={async () => { if (demoMode) applyDemoState(); else { setMaterials(await api.listMaterials()); setDashboard(await api.getDashboard()); } setMaterialEditor(false); notify("Material adicionado à biblioteca."); }} />}
+      {questionEditor && <QuestionModal subjects={subjects} topics={topics} onClose={() => setQuestionEditor(false)} onSaved={async () => { if (demoMode) { applyDemoState(); setRanking(demoRanking); } else { setDashboard(await api.getDashboard()); setRanking(await api.getPriorityRanking()); } setQuestionEditor(false); notify("Desempenho registrado."); }} />}
       </div>
     </div>
   );
@@ -491,9 +674,23 @@ function Overview({ dashboard, schedule, focus, onNavigate }: { dashboard: Dashb
   </div>;
 }
 
-function MatrixView({ schedule, subjects, onAdd, onEdit, onDelete }: { schedule: ScheduleResponse | null; subjects: Subject[]; onAdd: () => void; onEdit: (subject: Subject) => void; onDelete: (subject: Subject) => void }) {
+function MatrixView({ schedule, subjects, onAdd, onEdit, onDelete, onBulkAdd }: { schedule: ScheduleResponse | null; subjects: Subject[]; onAdd: () => void; onEdit: (subject: Subject) => void; onDelete: (subject: Subject) => void; onBulkAdd: (group: CatalogGroup) => void }) {
+  const [catalogGroup, setCatalogGroup] = useState<CatalogGroup>("ita-ime");
+  const names = new Set(subjects.map((subject) => subject.name));
+  const availableInGroup = catalogSubjects.filter((entry) => entry.group === catalogGroup && !names.has(entry.name));
   return <div className="page-stack">
     <section className="card matrix-intro"><div><p className="eyebrow">Motor de priorização ponderada</p><h2>IP = peso estratégico × dificuldade pessoal</h2><p>Os tempos são tetos máximos. Todo bloco é arredondado para cinco minutos sem estourar sua carga; a diferença fica no Project Buffer.</p></div><button className="button primary" onClick={onAdd}><Plus size={17} /> Nova matéria</button></section>
+    <section className="card catalog-card">
+      <div className="section-heading"><div><p className="eyebrow">Matriz da ponte</p><h2>Catálogo de matérias</h2></div>
+        <div className="catalog-tabs">{CATALOG_GROUPS.map((group) => <button key={group} className={`catalog-tab ${catalogGroup === group ? "active" : ""}`} onClick={() => setCatalogGroup(group)}>{CATALOG_GROUP_LABELS[group]}</button>)}</div>
+      </div>
+      <p className="catalog-hint">{CATALOG_GROUP_HINTS[catalogGroup]}</p>
+      <div className="catalog-list">{catalogSubjects.filter((entry) => entry.group === catalogGroup).map((entry) => {
+        const added = names.has(entry.name);
+        return <div className={`catalog-item ${added ? "added" : ""}`} key={entry.name}><span className="color-dot" style={{ background: added ? "#34d399" : "#27435f" }} /><span className="catalog-item-name">{entry.name}</span><span className="catalog-item-meta">Peso {entry.weight} · {entry.difficulty}×</span><b className="catalog-item-ip">{entry.weight * entry.difficulty}</b>{added ? <span className="catalog-item-state">na matriz</span> : null}</div>;
+      })}</div>
+      <div className="catalog-actions"><span className="muted-text">{availableInGroup.length} disponíveis neste grupo</span><button className="button secondary" disabled={!availableInGroup.length} onClick={() => onBulkAdd(catalogGroup)}><Plus size={16} /> Adicionar {availableInGroup.length} ao catálogo</button></div>
+    </section>
     <section className="card table-card">
       <div className="table-wrap"><table><thead><tr><th>Matéria / frente</th><th>Peso</th><th>Dificuldade</th><th>IP</th><th>Teto (timebox)</th><th>Participação</th><th aria-label="Ações" /></tr></thead>
         <tbody>{schedule?.allocations.map((item) => <tr key={item.id}><td><span className="subject-cell"><span className="color-dot" style={{ background: color(item.color) }} />{item.name}</span></td><td><span className="number-badge">{item.weight}</span></td><td><span className="number-badge muted">{item.difficulty}</span></td><td><strong className="ip-badge">{item.computedIp}</strong></td><td><strong className="time-value">{item.formattedTime}</strong></td><td><div className="progress-inline"><span style={{ width: `${item.percentage}%`, background: color(item.color) }} /><small>{item.percentage}%</small></div></td><td className="actions"><button className="icon-button" title="Editar" onClick={() => onEdit(item)}><Pencil size={16} /></button><button className="icon-button danger" title="Remover" onClick={() => onDelete(item)}><Trash2 size={16} /></button></td></tr>)}</tbody>
@@ -504,24 +701,43 @@ function MatrixView({ schedule, subjects, onAdd, onEdit, onDelete }: { schedule:
   </div>;
 }
 
-function PlanningView({ profile, schedule, weeklyMinutes, demo, subjects, onProfile, onSaveProfile, onSavePlan, allocations }: { profile: Profile; schedule: ScheduleResponse | null; weeklyMinutes: number; demo: boolean; subjects: Subject[]; onProfile: (profile: Profile) => void; onSaveProfile: () => void; onSavePlan: () => void; allocations: DayAllocation[] }) {
+function PlanningView({ profile, schedule, weeklyMinutes, subjects, onProfile, onSaveProfile, onSavePlan, allocations, demo, onSubjectAdded }: { profile: Profile; schedule: ScheduleResponse | null; weeklyMinutes: number; subjects: Subject[]; onProfile: (profile: Profile) => void; onSaveProfile: () => void; onSavePlan: () => void; allocations: DayAllocation[]; demo: boolean; onSubjectAdded: (subject: Subject) => void }) {
   const trackOptions = ["Ensino Médio", "ENEM", "ITA", "IME", "Personalizado"];
   const byDay: DayAllocation[][] = Array.from({ length: 7 }, () => []);
   for (const allocation of allocations) byDay[allocation.weekday].push(allocation);
+  const studyDays = Array.isArray(profile.studyDays) && profile.studyDays.length ? profile.studyDays : Array.from({ length: profile.weeklyDays }, (_, index) => index);
+  const studySet = new Set(studyDays);
+  const toggleStudyDay = (index: number) => {
+    const next = studySet.has(index) ? studyDays.filter((day) => day !== index) : [...studyDays, index].sort((a, b) => a - b);
+    if (!next.length) return;
+    onProfile({ ...profile, studyDays: next, weeklyDays: next.length });
+  };
+  const weekTable = schedule ? WEEKDAY_NAMES.map((dayName, index) => {
+    if (!studySet.has(index)) return { dayName, isStudy: false as const, slots: [] as ScheduleResponse["allocations"], total: 0 };
+    const dayIndex = studyDays.indexOf(index);
+    const slots = schedule.allocations.filter((item) => {
+      const position = schedule.allocations.findIndex((candidate) => candidate.id === item.id);
+      return position !== -1 && position % studyDays.length === dayIndex % studyDays.length;
+    });
+    return { dayName, isStudy: true as const, slots, total: slots.reduce((sum, item) => sum + item.allocatedMinutes, 0) };
+  }) : [];
   const [wizard, setWizard] = useState(false);
   return <div className="page-stack">
     <section className="card settings-card"><div className="section-heading"><div><p className="eyebrow">Capacidade real</p><h2>Configure sua semana</h2></div><div className="heading-actions"><button className="button ghost" onClick={() => setWizard(true)}><CalendarCheck size={16} /> Rota da prova</button><button className="button primary" onClick={onSaveProfile}><Save size={16} /> Salvar configuração</button></div></div>
-      <div className="setting-fields"><label>Horas líquidas por dia<input type="number" min="0.5" max="24" step="0.5" value={profile.dailyHours} onChange={(event) => onProfile({ ...profile, dailyHours: Number(event.target.value) })} /></label><label>Dias de estudo/semana<select value={profile.weeklyDays} onChange={(event) => onProfile({ ...profile, weeklyDays: Number(event.target.value) })}>{[1,2,3,4,5,6,7].map((day) => <option key={day} value={day}>{day} dias</option>)}</select></label><label>Trilha principal<select value={profile.examTrack} onChange={(event) => onProfile({ ...profile, examTrack: event.target.value as Profile["examTrack"] })}>{trackOptions.map((track) => <option key={track}>{track}</option>)}</select></label><div className="weekly-total"><span>Tempo semanal planejado</span><strong>{minutes(weeklyMinutes)}</strong></div></div>
+      <div className="setting-fields"><label>Horas líquidas por dia<input type="number" min="0.5" max="24" step="0.5" value={profile.dailyHours} onChange={(event) => onProfile({ ...profile, dailyHours: Number(event.target.value) })} /></label><label>Dias de estudo/semana<div className="day-picker">{WEEKDAY_NAMES.map((dayName, index) => <button type="button" key={dayName} className={`day-tick ${studySet.has(index) ? "active" : ""}`} onClick={() => toggleStudyDay(index)}>{dayName}</button>)}</div></label><label>Trilha principal<select value={profile.examTrack} onChange={(event) => onProfile({ ...profile, examTrack: event.target.value as Profile["examTrack"] })}>{trackOptions.map((track) => <option key={track}>{track}</option>)}</select></label><div className="weekly-total"><span>Tempo semanal planejado</span><strong>{minutes(weeklyMinutes)}</strong></div></div>
     </section>
-    <section className="card schedule-card"><div className="section-heading"><div><p className="eyebrow">Plano diário de execução</p><h2>Timeboxes inegociáveis</h2></div>{schedule && <button className="button secondary" onClick={onSavePlan} disabled={demo} title={demo ? "Desativado no modo demonstração" : undefined}><Save size={16} /> Salvar hoje</button>}</div>
-      {schedule ? <><div className="timeline">{schedule.allocations.map((item) => <div className="timeline-item" key={item.id}><div className="timeline-color" style={{ background: color(item.color) }} /><div className="timeline-main"><div><strong>{item.name}</strong><span>IP {item.computedIp} · {item.percentage}% da carga</span></div><b>{item.formattedTime}</b></div><div className="timeline-track"><span style={{ width: `${item.percentage}%`, background: color(item.color) }} /></div><small>Semana: {minutes(item.allocatedMinutes * profile.weeklyDays)} em {profile.weeklyDays} blocos</small></div>)}</div><div className="buffer-box"><Zap size={20} /><div><strong>Project Buffer: {schedule.formattedProjectBuffer}</strong><span>Reserva técnica para imprevistos ou tópicos transferidos. Não redistribua antes de executar a matriz.</span></div></div></> : <EmptyState icon={<CalendarDays />} text="Adicione matérias à matriz para montar o plano." />}
+    <section className="card week-table-card"><div className="section-heading"><div><p className="eyebrow">Grade da semana</p><h2>Tabela da semana</h2></div><CalendarDays size={20} /></div>
+      {schedule ? <div className="week-table">{weekTable.map((col) => <div className={`week-col ${col.isStudy ? "study" : "rest"}`} key={col.dayName}><span className="week-day-label">{col.dayName}</span>{col.isStudy ? <div className="week-slots">{col.slots.map((item) => <div className="week-slot" key={item.id} title={item.name}><i style={{ background: color(item.color) }} /><span>{item.name}</span><b>{item.formattedTime}</b></div>)}</div> : <span className="week-rest">descanso</span>}<div className="week-total">{col.isStudy ? minutes(col.total) : "—"}</div></div>)}</div> : <EmptyState icon={<CalendarDays />} text="Adicione matérias à matriz para montar a tabela da semana." />}
+    </section>
+    <section className="card schedule-card"><div className="section-heading"><div><p className="eyebrow">Plano diário de execução</p><h2>Timeboxes inegociáveis</h2></div>{schedule && <button className="button secondary" onClick={onSavePlan}><Save size={16} /> Salvar hoje</button>}</div>
+      {schedule ? <><div className="timeline">{schedule.allocations.map((item) => <div className="timeline-item" key={item.id}><div className="timeline-color" style={{ background: color(item.color) }} /><div className="timeline-main"><div><strong>{item.name}</strong><span>IP {item.computedIp} · {item.percentage}% da carga</span></div><b>{item.formattedTime}</b></div><div className="timeline-track"><span style={{ width: `${item.percentage}%`, background: color(item.color) }} /></div><small>Semana: {minutes(item.allocatedMinutes * studyDays.length)} em {studyDays.length} blocos</small></div>)}</div><div className="buffer-box"><Zap size={20} /><div><strong>Project Buffer: {schedule.formattedProjectBuffer}</strong><span>Reserva técnica para imprevistos ou tópicos transferidos. Não redistribua antes de executar a matriz.</span></div></div></> : <EmptyState icon={<CalendarDays />} text="Adicione matérias à matriz para montar o plano." />}
     </section>
     <section className="card reinforcement-card">
       <div className="section-heading"><div><p className="eyebrow">Foco de recuperação</p><h2>Reforço da semana</h2></div><CalendarCheck size={20} /></div>
-      {allocations.length ? <div className="reinforce-week">{WEEKDAY_NAMES.map((dayName, index) => <div className="reinforce-day" key={dayName}><span className="reinforce-day-label">{dayName}</span>{byDay[index].length ? byDay[index].map((a) => <div className="reinforce-chip" key={a.id} title={a.note ?? undefined}><i style={{ background: color(a.color) }} />{a.subjectName.split("·")[0].trim()}<b>{minutes(a.minutes)}</b></div>) : <span className="muted-text">—</span>}</div>)}</div> : <p className="cogn-empty">Nenhum reforço alocado. Vá na aba Ranking e clique em <em>Gerenciar</em> numa matéria para fixar seu dia de recuperação.</p>}
+      {allocations.length ? <div className="reinforce-week">{studyDays.map((dayIndex) => <div className="reinforce-day" key={dayIndex}><span className="reinforce-day-label">{WEEKDAY_NAMES[dayIndex]}</span>{byDay[dayIndex].length ? byDay[dayIndex].map((a) => <div className="reinforce-chip" key={a.id} title={a.note ?? undefined}><i style={{ background: color(a.color) }} />{a.subjectName.split("·")[0].trim()}<b>{minutes(a.minutes)}</b></div>) : <span className="muted-text">—</span>}</div>)}</div> : <p className="cogn-empty">Nenhum reforço alocado. Vá na aba Ranking e clique em <em>Gerenciar</em> numa matéria para fixar seu dia de recuperação.</p>}
     </section>
     <RescheduleTriagePanel demo={demo} />
-    {wizard && <PlanWizard demo={demo} subjects={subjects} profile={profile} onClose={() => setWizard(false)} />}
+    {wizard && <PlanWizard subjects={subjects} profile={profile} onClose={() => setWizard(false)} demo={demo} onSubjectAdded={onSubjectAdded} />}
   </div>;
 }
 
@@ -546,7 +762,7 @@ function TrendTooltip({ active, payload, label, granularity }: { active?: boolea
   );
 }
 
-function PerformanceView({ dashboard, trend, granularity, onGranularity, onTrendFilter, trendSubjectId, trendTopicId, onRecord, subjects, topics, schedule, executed, points, focusPoints, memoryItems, memoryProjection, overview, demo, onMemorySelect, onMemoryCreate, onMemoryDelete, onMemoryReview }: { dashboard: DashboardData | null; trend: PerformancePoint[]; granularity: PerformanceGranularity; onGranularity: (granularity: PerformanceGranularity) => void; onTrendFilter: (subjectId: number | null, topicId: number | null) => void; trendSubjectId: number | null; trendTopicId: number | null; onRecord: () => void; subjects: Subject[]; topics: Topic[]; schedule: ScheduleResponse | null; executed: Map<number, number>; points: SubjectAccuracyPoint[]; focusPoints: FocusOverloadPoint[]; memoryItems: SpacedRepetitionItem[]; memoryProjection: MemoryDecayProjection | null; overview: RetentionOverview | null; demo: boolean; onMemorySelect: (id: number) => void; onMemoryCreate: (input: MemoryItemInput) => void; onMemoryDelete: (id: number) => void; onMemoryReview: (id: number, grade: ReviewGrade) => void }) {
+const PerformanceView = ({ dashboard, trend, granularity, onGranularity, onTrendFilter, trendSubjectId, trendTopicId, onRecord, subjects, topics, schedule, executed, points, focusPoints, memoryItems, memoryProjection, overview, livestream, report, onMemorySelect, onMemoryCreate, onMemoryDelete, onMemoryReview }: { dashboard: DashboardData | null; trend: PerformancePoint[]; granularity: PerformanceGranularity; onGranularity: (granularity: PerformanceGranularity) => void; onTrendFilter: (subjectId: number | null, topicId: number | null) => void; trendSubjectId: number | null; trendTopicId: number | null; onRecord: () => void; subjects: Subject[]; topics: Topic[]; schedule: ScheduleResponse | null; executed: Map<number, number>; points: SubjectAccuracyPoint[]; focusPoints: FocusOverloadPoint[]; memoryItems: SpacedRepetitionItem[]; memoryProjection: MemoryDecayProjection | null; overview: RetentionOverview | null; livestream: RetentionLiveStream | null; report: ConsolidatedPerformanceReport | null; onMemorySelect: (id: number) => void; onMemoryCreate: (input: MemoryItemInput) => void; onMemoryDelete: (id: number) => void; onMemoryReview: (id: number, grade: ReviewGrade) => void }) => {
   const data = dashboard?.subjectPerformance ?? [];
   const usefulData = data.filter((item) => item.questionsTotal > 0);
   const hasTrend = trend.length > 0;
@@ -573,11 +789,13 @@ function PerformanceView({ dashboard, trend, granularity, onGranularity, onTrend
       {hasTrend ? <div className="chart"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={trend}><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8b7cf6" stopOpacity={0.45} /><stop offset="100%" stopColor="#8b7cf6" stopOpacity={0.04} /></linearGradient></defs><CartesianGrid stroke="#203044" strokeDasharray="4 4" /><XAxis dataKey="label" tick={{ fill: "#9aabc0", fontSize: 11 }} interval="preserveStartEnd" minTickGap={22} tickFormatter={(label) => trendTick(label, granularity)} /><YAxis yAxisId="left" domain={[minAccuracy, maxAccuracy]} unit="%" tick={{ fill: "#9aabc0", fontSize: 11 }} width={38} /><YAxis yAxisId="right" orientation="right" domain={[0, (dataMax: number) => Math.ceil(dataMax * 1.15)]} tick={{ fill: "#77899f", fontSize: 11 }} tickCount={4} /><Tooltip content={<TrendTooltip granularity={granularity} />} contentStyle={tooltipStyle} cursor={{ stroke: "#334760", strokeDasharray: "4 4" }} /><ReferenceLine yAxisId="left" y={70} stroke="#fbbf24" strokeDasharray="6 3" label={{ value: "Meta 70%", position: "insideTopLeft", fill: "#fbbf24", fontSize: 10 }} /><Area yAxisId="left" type="monotone" dataKey="accuracy" name="Taxa de acerto" stroke="#8b7cf6" strokeWidth={3} fill="url(#trendFill)" dot={{ fill: "#b5a9ff", r: 3 }} activeDot={{ r: 5 }} /><Bar yAxisId="right" dataKey="questionsTotal" name="Volume de questões" fill="#2b3e57" radius={[5, 5, 0, 0]} barSize={7} /></ComposedChart></ResponsiveContainer></div> : <EmptyState icon={<LineChart />} text="Registre blocos de questões para visualizar a evolução do seu acerto por dia, semana, mês e ano." />}
     </section>
     <DayCompareChart points={points} />
-    <RetentionGraphBoard overview={overview} demo={demo} />
+    <RetentionGraphBoard overview={overview} />
+    <LiveRetentionCard livestream={livestream} />
+    <ConsolidatedReportCard report={report} />
     <section className="metric-grid"><Metric icon={<Target />} label="Total de questões" value={`${dashboard?.questions.total ?? 0}`} helper="todas as disciplinas" accent="indigo" /><Metric icon={<CheckCircle2 />} label="Acertos" value={`${dashboard?.questions.correct ?? 0}`} helper="respostas corretas" accent="emerald" /><Metric icon={<Trophy />} label="Taxa global" value={`${dashboard?.questions.accuracy ?? 0}%`} helper="média ponderada pelos itens" accent="amber" /><Metric icon={<Timer />} label="Tempo registrado" value={minutes(dashboard?.weeklyStudyMinutes ?? 0)} helper="últimos 7 dias" accent="pink" /></section>
     <section className="card chart-card"><div className="section-heading"><div><p className="eyebrow">Diagnóstico por disciplina</p><h2>Taxa de acerto</h2></div><BarChart3 size={20} /></div>{usefulData.length ? <div className="chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={usefulData}><CartesianGrid stroke="#203044" strokeDasharray="4 4" vertical={false} /><XAxis dataKey="subjectName" tick={{ fill: "#9aabc0", fontSize: 11 }} tickFormatter={(name) => name.split("·")[0].trim()} /><YAxis domain={[0, 100]} unit="%" tick={{ fill: "#9aabc0", fontSize: 11 }} /><Tooltip contentStyle={tooltipStyle} /><Bar dataKey="accuracy" radius={[6,6,0,0]}>{usefulData.map((entry) => <Cell key={entry.subjectId} fill={color(entry.color)} />)}</Bar></BarChart></ResponsiveContainer></div> : <EmptyState icon={<BarChart3 />} text="Seu gráfico aparecerá depois do primeiro lançamento de questões." />}</section>
     <section className="card table-card"><div className="section-heading"><div><p className="eyebrow">Tabela de diagnóstico</p><h2>Desempenho acumulado</h2></div></div><div className="table-wrap"><table><thead><tr><th>Disciplina</th><th>Questões</th><th>Acertos</th><th>Taxa</th><th>Tempo</th></tr></thead><tbody>{data.map((item) => <tr key={item.subjectId}><td><span className="subject-cell"><span className="color-dot" style={{ background: color(item.color) }} />{item.subjectName}</span></td><td>{item.questionsTotal}</td><td>{item.questionsCorrect}</td><td><strong className={item.accuracy >= 70 ? "good" : item.accuracy > 0 ? "needs-work" : "muted-text"}>{item.accuracy}%</strong></td><td>{minutes(item.studiedMinutes)}</td></tr>)}</tbody></table></div></section>
-    {subjects.length ? <CognitiveCharts subjects={subjects} topics={topics} schedule={schedule} executed={executed} points={points} focusPoints={focusPoints} memoryItems={memoryItems} memoryProjection={memoryProjection} demo={demo} onMemorySelect={onMemorySelect} onMemoryCreate={onMemoryCreate} onMemoryDelete={onMemoryDelete} onMemoryReview={onMemoryReview} /> : null}
+    {subjects.length ? <CognitiveCharts subjects={subjects} topics={topics} schedule={schedule} executed={executed} points={points} focusPoints={focusPoints} memoryItems={memoryItems} memoryProjection={memoryProjection} onMemorySelect={onMemorySelect} onMemoryCreate={onMemoryCreate} onMemoryDelete={onMemoryDelete} onMemoryReview={onMemoryReview} /> : null}
   </div>;
 }
 
@@ -613,72 +831,82 @@ function DayCompareChart({ points }: { points: SubjectAccuracyPoint[] }) {
   );
 }
 
-function PlanWizard({ demo, subjects, profile, onClose }: { demo: boolean; subjects: Subject[]; profile: Profile; onClose: () => void }) {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const [step, setStep] = useState(0);
-  const [form, setForm] = useState<PlanInput>({ startDate: todayIso, examDate: profile.examDate ?? todayIso, totalHours: profile.dailyHours * profile.weeklyDays });
-  const [selected, setSelected] = useState<Set<number>>(new Set(subjects.slice(0, 2).map((s) => s.id)));
-  const [plan, setPlan] = useState<PlanResponse | null>(null);
-  const [generating, setGenerating] = useState(false);
-
-  const toggle = (id: number) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  const weeksLeft = form.examDate && form.startDate && form.examDate > form.startDate ? Math.max(1, Math.round((new Date(form.examDate).getTime() - new Date(form.startDate).getTime()) / (1000 * 60 * 60 * 24 * 7))) : 1;
-
-  const generate = async () => {
-    if (!selected.size) return;
-    setGenerating(true);
-    if (demo) {
-      window.setTimeout(() => { setPlan(demoPlan); setStep(2); setGenerating(false); }, 550);
-      return;
-    }
-    try {
-      setPlan(await api.getStudyPlan({ ...form, totalHours: Number(form.totalHours) || profile.dailyHours * profile.weeklyDays }));
-      setStep(2);
-    } catch { setGenerating(false); }
-  };
-
-  const dayLabel = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-
+function LiveRetentionCard({ livestream }: { livestream: RetentionLiveStream | null }) {
+  const ticks = livestream?.ticks ?? [];
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal wizard-modal" onClick={(event) => event.stopPropagation()}>
-        <div className="modal-title"><div>{step < 2 ? <p className="eyebrow">Rota de prova · cronograma reverso</p> : <p className="eyebrow">Rota pronta</p>}<h2>{step === 0 ? "Defina a linha de chegada" : step === 1 ? "Escolha os focos de ataque" : "Semanas até a prova"}</h2></div><button className="icon-button" title="Fechar" onClick={onClose}><X size={16} /></button></div>
-        <div className="wizard-steps"><span className={step >= 0 ? "active" : ""}>1 · Meta</span><span className={step >= 1 ? "active" : ""}>2 · Focos</span><span className={step >= 2 ? "active" : ""}>3 · Rotina</span></div>
-
-        {step === 0 && <div className="form-stack">
-          <div className="form-two"><label>Data da prova<input type="date" value={form.examDate} onChange={(event) => setForm((prev) => ({ ...prev, examDate: event.target.value }))} /></label><label>Início da rota<input type="date" value={form.startDate} onChange={(event) => setForm((prev) => ({ ...prev, startDate: event.target.value }))} /></label></div>
-          <label>Horas líquidas de estudo por dia<input type="number" min="0.5" max="16" step="0.5" value={Math.round(form.totalHours / Math.max(profile.weeklyDays, 1) * 10) / 10} onChange={(event) => setForm((prev) => ({ ...prev, totalHours: Number(event.target.value) * Math.max(profile.weeklyDays, 1) }))} /></label>
-          <p className="form-hint">Você tem <strong>{weeksLeft} semanas</strong>. O motor distribui os blocos priorizando a janela matinal de maior resistência à procrastinação e reserva tempo de revisão nas semanas finais.</p>
-          <div className="modal-actions"><button className="button primary" onClick={() => setStep(1)}>Continuar <ArrowRight size={15} /></button></div>
-        </div>}
-
-        {step === 1 && <div className="form-stack">
-          <p className="form-hint">Quais disciplinas entram na <strong>fase de ataque</strong>? Elas recebem os blocos principais; o restante fica em manutenção via Project Buffer.</p>
-          <div className="subject-grid">{subjects.map((subject) => <button key={subject.id} className={`subject-tile ${selected.has(subject.id) ? "active" : ""}`} onClick={() => toggle(subject.id)}><i style={{ background: color(subject.color) }} />{subject.name.split("·")[0].trim()}<small>peso {subject.weight} · dificuldade {subject.difficulty}</small></button>)}</div>
-          {!subjects.length && <p className="cogn-empty">Adicione matérias na aba Matriz antes de montar a rota.</p>}
-          <div className="modal-actions"><button className="button ghost" onClick={() => setStep(0)}>Voltar</button><button className="button primary" onClick={generate} disabled={!selected.size || generating}>{generating ? <TimerReset size={15} /> : <Sparkles size={15} />} {generating ? "Montando rota…" : "Gerar rota"}</button></div>
-        </div>}
-
-        {step === 2 && plan && <div className="form-stack">
-          {plan.riskName && <div className="cog-alert warning"><AlertTriangle size={16} /><div><strong>Matéria de maior risco: {plan.riskName.split("·")[0].trim()}.</strong><span>Recebe a primeira janela matinal — o período de menor resistência à procrastinação.</span></div></div>}
-          <div className="focus-summary-row"><div><strong>{plan.weeks}</strong><span>semanas até a prova</span></div><div><strong>{plan.days.length}</strong><span>dias na rota</span></div><div><strong>{Math.max(1, plan.days[0]?.focusSubjects.length ?? 0)}</strong><span>focos por dia</span></div></div>
-          <div className="plan-days">{plan.days.slice(0, 7).map((day: PlanDay) => <div className="plan-day" key={day.date}><span className="plan-day-date">{dayLabel(day.date)}</span><span className="plan-day-name">{day.weekdayLabel}</span><div className="plan-day-focus">{day.focusSubjects.map((focus: PlanFocus) => <span className="plan-chip" key={`${day.date}-${focus.subjectId}`}><i style={{ background: color(focus.color) }} />{focus.subjectName.split("·")[0].trim()}<b>{focus.minutes}m</b><em>{focus.slot}</em></span>)}</div></div>)}</div>
-          <p className="cogn-footnote"><CalendarCheck size={14} /> O bloco de maior risco abre o dia nos primeiros 7 dias; após isso o motor alterna para manter o intervalo entre matérias em até 2 dias.</p>
-          <div className="modal-actions"><button className="button ghost" onClick={() => setStep(1)}>Voltar</button><button className="button primary" onClick={onClose}><CheckCircle2 size={15} /> Concluir</button></div>
-        </div>}
-      </div>
-    </div>
+    <section className="card table-card">
+      <div className="section-heading"><div><p className="eyebrow">Retenção · tempo real</p><h2>Livestream de retenção</h2></div><span className="live-badge">{livestream ? `AO VIVO · ${livestream.generatedAt}` : "AO VIVO"}</span></div>
+      {ticks.length ? (
+        <div className="live-grid">
+          {ticks.map((tick) => (
+            <div key={tick.subjectId} className={`live-row ${tick.overdue || tick.manyPartials ? "on-alert" : ""}`} title={`${tick.subjectName}${tick.overdue ? " · matéria atrasada (retenção abaixo do piso)" : ""}${tick.manyPartials ? " · muitos blocos parciais" : ""}`}>
+              <i style={{ background: color(tick.color) }} />
+              <span className="live-subject">{tick.subjectName.split("·")[0].trim()}</span>
+              <strong>{tick.accuracy}%</strong>
+              <span className={tick.retentionDelta < 0 ? "live-delta down" : "live-delta up"}>{tick.retentionDelta >= 0 ? "▲ " : "▼ "}{Math.abs(tick.retentionDelta).toFixed(1)}</span>
+              {tick.overdue && <span className="alert-chip live-alert">atrasada</span>}
+              {tick.manyPartials && <span className="alert-chip">parciais</span>}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState icon={<Activity />} text="Sem amostras ainda — adicione itens de memória e registre blocos de foco para o livestream." />
+      )}
+    </section>
   );
 }
 
-function LibraryView({ materials, subjects, topics, onAdd, onDelete, onStatus }: { materials: StudyMaterial[]; subjects: Subject[]; topics: Topic[]; onAdd: () => void; onDelete: (material: StudyMaterial) => void; onStatus: (material: StudyMaterial, status: MaterialStatus) => void }) {
+function ConsolidatedReportCard({ report }: { report: ConsolidatedPerformanceReport | null }) {
+  if (!report) {
+    return (
+      <section className="card table-card">
+        <div className="section-heading"><div><p className="eyebrow">Panorama único</p><h2>Relatório consolidado</h2></div><ClipboardCheck size={20} /></div>
+        <EmptyState icon={<ClipboardCheck />} text="Relatório disponível com dados reais — registre questões, blocos de foco e itens de memória." />
+      </section>
+    );
+  }
+  return (
+    <section className="card table-card">
+      <div className="section-heading"><div><p className="eyebrow">Panorama único · {report.generatedAt}</p><h2>Relatório consolidado de desempenho</h2></div><ClipboardCheck size={20} /></div>
+      <div className="metric-grid">
+        <Metric icon={<Target />} label="Questões" value={`${report.totals.questionsTotal}`} helper={`${report.totals.questionsCorrect} corretas`} accent="indigo" />
+        <Metric icon={<CheckCircle2 />} label="Taxa global" value={`${report.totals.accuracy}%`} helper="acertos sobre o total" accent={report.totals.accuracy >= 70 ? "emerald" : "amber"} />
+        <Metric icon={<TimerReset />} label="Deep work" value={`${report.totals.deepWorkBlocks}`} helper="blocos concluídos" accent="emerald" />
+        <Metric icon={<AlertTriangle />} label="Saídas precoces" value={`${report.totals.partialBlocks}`} helper="blocos parciais" accent="amber" />
+        <Metric icon={<AlertCircle />} label="Itens atrasados" value={`${report.totals.overdueItems}`} helper={`${report.totals.subjectsLate} matérias em atraso`} accent="pink" />
+      </div>
+      <div className="table-wrap"><table>
+        <thead><tr><th>#</th><th>Disciplina</th><th>Acerto</th><th>Retenção</th><th>Venc.</th><th>Deep work</th><th>Parciais</th><th>Status</th></tr></thead>
+        <tbody>
+          {report.ranking.map((row) => (
+            <tr key={row.subjectId} className={row.isOverdue || row.hasManyPartials ? "row-alert" : undefined}>
+              <td>{row.rank}</td>
+              <td><span className="subject-cell"><span className="color-dot" style={{ background: color(row.color) }} />{row.subjectName}</span></td>
+              <td><strong className={row.accuracy >= 70 ? "good" : row.accuracy > 0 ? "needs-work" : "muted-text"}>{row.accuracy}%</strong></td>
+              <td>{row.retentionToday}%</td>
+              <td>{row.dueInDays > 0 ? `${row.dueInDays}d` : row.dueInDays === 0 ? "hoje" : `${row.dueInDays}d`}</td>
+              <td>{row.deepWorkBlocks}</td>
+              <td><span className={row.hasManyPartials ? "needs-work" : "muted-text"}>{row.partialBlocks}</span></td>
+              <td>{row.isOverdue ? <span className="needs-work">Atrasada</span> : row.hasManyPartials ? <span className="needs-work">Parciais</span> : <span className="good">OK</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table></div>
+    </section>
+  );
+}
+function LibraryView({ materials, subjects, topics, onAdd, onDelete, onStatus, demo }: { materials: StudyMaterial[]; subjects: Subject[]; topics: Topic[]; onAdd: () => void; onDelete: (material: StudyMaterial) => void; onStatus: (material: StudyMaterial, status: MaterialStatus) => void; demo: boolean }) {
   const [strategies, setStrategies] = useState<MaterialStrategy[]>([]);
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
 
   useEffect(() => {
+    if (demo) {
+      setStrategies(demoMaterialStrategies);
+      return;
+    }
     if (!materials.length) return;
     api.listMaterialStrategies().then(setStrategies).catch(() => undefined);
-  }, [materials.length]);
+  }, [materials.length, demo]);
 
   const strategyFor = useMemo(() => {
     const byKeyword = new Map<string, MaterialStrategy>();
@@ -721,5 +949,4 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
 function EmptyState({ icon, text, action }: { icon: ReactNode; text: string; action?: ReactNode }) { return <div className="empty-state"><div>{icon}</div><p>{text}</p>{action}</div>; }
 function Loading() { return <div className="loading"><div className="loading-mark"><BrainCircuit size={28} /></div><span>Abrindo seu sistema de estudos…</span></div>; }
 function titleFor(view: View) { return ({ inicio: "Visão geral", matriz: "Matriz de priorização", planejamento: "Planejamento semanal", foco: "Foco · Deep Work", desempenho: "Desempenho", avanco: "Avanço por matéria", ranking: "Ranking de prioridade", biblioteca: "Biblioteca" })[view]; }
-function color(name: string) { return COLOR_HEX[name] ?? COLOR_HEX.blue; }
 const tooltipStyle = { background: "#111d2d", border: "1px solid #2b3e57", borderRadius: 10, color: "#eff6ff" };

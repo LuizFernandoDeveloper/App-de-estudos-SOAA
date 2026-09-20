@@ -3,10 +3,14 @@ import type {
   BrainDumpLog,
   BrainDumpLogInput,
   BufferAllocation,
+  ConsolidatedPerformanceReport,
   DashboardData,
   DayAllocation,
   DayAllocationInput,
   FocusOverloadPoint,
+  FocusSession,
+  FocusSessionInput,
+  FsrsReview,
   LearningSpeed,
   MaterialStrategy,
   MemoryDecayProjection,
@@ -15,14 +19,13 @@ import type {
   PerformancePoint,
   PlanInput,
   PlanResponse,
-  PomodoroSession,
-  PomodoroSessionInput,
   Profile,
   QuestionResult,
   ReschedulePlan,
+  RetentionCurve,
+  RetentionLiveStream,
   RetentionOverview,
   ReviewGrade,
-  ReviewLog,
   ScheduleResponse,
   SessionSummary,
   SpacedRepetitionItem,
@@ -51,6 +54,7 @@ export interface ProfileInput {
   examTrack: string;
   startDate?: string | null;
   examDate?: string | null;
+  studyDays: number[];
 }
 
 export interface MaterialInput {
@@ -113,9 +117,9 @@ export const api = {
     invoke<DayAllocation[]>("save_day_allocation", { input }),
   deleteDayAllocation: (subjectId: number) =>
     invoke<DayAllocation[]>("delete_day_allocation", { subjectId }),
-  listPomodoroSessions: () => invoke<PomodoroSession[]>("list_pomodoro_sessions"),
-  completePomodoroSession: (input: PomodoroSessionInput) =>
-    invoke<SessionSummary>("complete_pomodoro_session", { input }),
+  listFocusSessions: () => invoke<FocusSession[]>("list_focus_sessions"),
+  completeFocusSession: (input: FocusSessionInput) =>
+    invoke<SessionSummary>("complete_focus_session", { input }),
   getFocusTimebox: (subjectId: number) =>
     invoke<TimeboxSuggestion>("get_focus_timebox", { subjectId }),
   logBrainDump: (input: BrainDumpLogInput) => invoke<BrainDumpLog>("log_brain_dump", { input }),
@@ -133,8 +137,12 @@ export const api = {
   reviewMemoryItem: (id: number, grade: ReviewGrade) =>
     invoke<SpacedRepetitionItem>("review_memory_item", { id, grade }),
   getMemoryDecay: (itemId: number) => invoke<MemoryDecayProjection>("get_memory_decay", { id: itemId }),
-  listReviewLogs: (itemId: number) => invoke<ReviewLog[]>("list_review_logs", { itemId }),
+  listFsrsReviews: (itemId: number) => invoke<FsrsReview[]>("list_fsrs_reviews", { itemId }),
   getRetentionOverview: (horizonDays?: number) =>
     invoke<RetentionOverview>("get_retention_overview", { horizonDays: horizonDays ?? null }),
-  getDashboard: () => invoke<DashboardData>("get_dashboard")
+  getRetentionCurve: (itemId: number, horizonDays?: number) =>
+    invoke<RetentionCurve | null>("get_retention_curve", { itemId, horizonDays: horizonDays ?? null }),
+  getDashboard: () => invoke<DashboardData>("get_dashboard"),
+  getPerformanceLivestream: () => invoke<RetentionLiveStream>("get_performance_livestream"),
+  getConsolidatedReport: () => invoke<ConsolidatedPerformanceReport>("get_consolidated_report")
 };

@@ -1,16 +1,24 @@
-use std::{path::Path, sync::Mutex};
+use std::{collections::HashMap, path::Path, sync::Mutex};
 
 use rusqlite::{params, params_from_iter, Connection, Result as SqlResult, Row};
 
+use crate::scheduler::{
+    calculate_retrievability, days_since, difficulty_scale, due_date_iso, grade_label,
+    grade_multiplier, parse_date, today_iso,
+};
+
 use crate::models::{
-    BrainDumpLog, BrainDumpLogInput, BufferAllocation, DailyPerformance, DashboardData,
-    DayAllocation, DayAllocationInput, FocusOverloadPoint, LearningSpeed, MaterialInput,
-    MaterialProgress, MaterialReminder, MaterialStrategy, MemoryDecayProjection, MemoryPoint,
-    PerformancePoint, PlanDay, PlanFocus, PlanInput, PlanResponse, PomodoroSession,
-    PomodoroSessionInput, Profile, ProfileInput, QuestionProgress, QuestionResult,
-    QuestionResultInput, RescheduleItem, ReschedulePlan, RetentionOverview, RetentionSeriesInfo,
-    ReviewLog, SessionSummary, SpacedRepetitionItem, StrategyMatch, StudyMaterial, Subject,
-    SubjectAccuracyPoint, SubjectPerformance, SubjectRanking, TimeboxSuggestion, Topic,
+    BrainDumpLog, BrainDumpLogInput, BufferAllocation, ConsolidatedPerformanceReport,
+    ConsolidatedPerformanceRow, ConsolidatedPerformanceTotals, DailyPerformance, DashboardData,
+    DayAllocation, DayAllocationInput, FocusOverloadPoint, FocusSession, FocusSessionInput,
+    FocusZone, FsrsReview, LearningSpeed, MaterialInput, MaterialProgress, MaterialReminder,
+    MaterialStrategy, MemoryDecayProjection, MemoryPoint, PerformanceLiveStream,
+    PerformanceLiveTick, PerformancePoint, PlanDay, PlanFocus,
+    PlanInput, PlanResponse, Profile, ProfileInput, QuestionProgress, QuestionResult,
+    QuestionResultInput, RescheduleItem, ReschedulePlan, RetentionCurve, RetentionCurvePoint,
+    RetentionOverview, RetentionSeriesInfo, SessionSummary, SpacedRepetitionItem, StrategyMatch,
+    StudyMaterial, Subject, SubjectAccuracyPoint, SubjectPerformance, SubjectRanking,
+    TimeboxSuggestion, Topic,
 };
 
 pub const DEFAULT_USER_ID: i64 = 1;
@@ -30,7 +38,84 @@ impl AppState {
     }
 }
 
+/// Executa uma sequência de gravações dentro de UMA transação SQL.
+///
+/// Se a closure falhar, a transação é descartada sem commit e toda escrita parcial
+/// é revertida (rollback) pelo SQLite — nenhum registro sujo sobrevive. Todo caminho
+/// de escrita do banco passa por aqui.
+pub fn run_write<T>(
+    connection: &mut Connection,
+    operation: impl FnOnce(&Connection) -> SqlResult<T>,
+) -> SqlResult<T> {
+    let transaction = connection.transaction()?;
+    let result = operation(&transaction);
+    match result {
+        Ok(value) => {
+            transaction.commit()?;
+            Ok(value)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Migra bancos criados antes da separação `focus_sessions`/`fsrs_reviews`:
+/// renomeia as tabelas legadas (`pomodoro_sessions` → `focus_sessions` e
+/// `review_logs` → `fsrs_reviews`) e garante a coluna de zona de foco.
+///
+/// Importante: a ordem de execução é `SCHEMA` (cria as tabelas novas, vazias)
+/// seguido de `migrate`. Quando a base legada existe, descartamos a cópia vazia
+/// recém-criada e renomeamos a antiga — movendo dados, FKs e o índice que referenciam
+/// o nome antigo são ajustados pelo próprio ALTER TABLE RENAME do SQLite.
+fn migrate_focus_and_review_tables(connection: &Connection) -> SqlResult<()> {
+    let table_exists = |name: &str| -> SqlResult<bool> {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![name],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+    };
+
+    if table_exists("pomodoro_sessions")? {
+        connection.execute_batch(
+            "DROP TABLE IF EXISTS focus_sessions;
+             ALTER TABLE pomodoro_sessions RENAME TO focus_sessions;
+             DROP INDEX IF EXISTS idx_pomodoro_subject_started;",
+        )?;
+    }
+    if table_exists("review_logs")? {
+        connection.execute_batch(
+            "DROP TABLE IF EXISTS fsrs_reviews;
+             ALTER TABLE review_logs RENAME TO fsrs_reviews;
+             DROP INDEX IF EXISTS idx_review_logs_item;",
+        )?;
+    }
+
+    let focus_columns: Vec<String> = connection
+        .prepare("PRAGMA table_info(focus_sessions)")?
+        .query_map([], |row| row.get(1))?
+        .collect::<SqlResult<Vec<_>>>()?;
+    if !focus_columns.iter().any(|column| column == "zone") {
+        connection.execute_batch(
+            "ALTER TABLE focus_sessions ADD COLUMN zone TEXT NOT NULL DEFAULT 'baixa' CHECK(zone IN ('alta', 'media', 'baixa'));",
+        )?;
+    }
+    connection.execute_batch(
+        "UPDATE focus_sessions
+         SET zone = CASE
+           WHEN completion_rate >= 1.0 THEN 'baixa'
+           WHEN completion_rate >= 0.6 THEN 'media'
+           ELSE 'alta'
+         END;",
+    )?;
+
+    Ok(())
+}
+
 fn migrate(connection: &Connection) -> SqlResult<()> {
+    migrate_focus_and_review_tables(connection)?;
+
     let material_columns: Vec<String> = connection
         .prepare("PRAGMA table_info(study_materials)")?
         .query_map([], |row| row.get(1))?
@@ -72,21 +157,22 @@ fn migrate(connection: &Connection) -> SqlResult<()> {
     for (column, ddl) in [
         ("start_date", "ALTER TABLE user_settings ADD COLUMN start_date TEXT"),
         ("exam_date", "ALTER TABLE user_settings ADD COLUMN exam_date TEXT"),
+        ("study_days", "ALTER TABLE user_settings ADD COLUMN study_days TEXT"),
     ] {
         if !settings_columns.iter().any(|existing| existing == column) {
             connection.execute_batch(ddl)?;
         }
     }
 
-    let pomodoro_columns: Vec<String> = connection
-        .prepare("PRAGMA table_info(pomodoro_sessions)")?
+    let focus_columns_legacy: Vec<String> = connection
+        .prepare("PRAGMA table_info(focus_sessions)")?
         .query_map([], |row| row.get(1))?
         .collect::<SqlResult<Vec<_>>>()?;
     for (column, ddl) in [
-        ("status", "ALTER TABLE pomodoro_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('pending', 'partial', 'done', 'buffered'))"),
-        ("completion_percentage", "ALTER TABLE pomodoro_sessions ADD COLUMN completion_percentage REAL"),
+        ("status", "ALTER TABLE focus_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('pending', 'partial', 'done', 'buffered'))"),
+        ("completion_percentage", "ALTER TABLE focus_sessions ADD COLUMN completion_percentage REAL"),
     ] {
-        if !pomodoro_columns.iter().any(|existing| existing == column) {
+        if !focus_columns_legacy.iter().any(|existing| existing == column) {
             connection.execute_batch(ddl)?;
         }
     }
@@ -115,6 +201,13 @@ fn migrate(connection: &Connection) -> SqlResult<()> {
         }
     }
 
+    // Recria os índices com nome atual (idempotente). Necessário após a renomeação
+    // de tabelas legadas, que descarta os índices criados pelo SCHEMA na tabela vazia.
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_focus_subject_started ON focus_sessions(subject_id, started_at);
+         CREATE INDEX IF NOT EXISTS idx_fsrs_reviews_item ON fsrs_reviews(item_id, reviewed_at);",
+    )?;
+
     Ok(())
 }
 
@@ -130,7 +223,10 @@ CREATE TABLE IF NOT EXISTS user_settings (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   daily_hours REAL NOT NULL DEFAULT 6 CHECK (daily_hours > 0 AND daily_hours <= 24),
   weekly_days INTEGER NOT NULL DEFAULT 6 CHECK (weekly_days BETWEEN 1 AND 7),
-  exam_track TEXT NOT NULL DEFAULT 'ITA'
+  exam_track TEXT NOT NULL DEFAULT 'ITA',
+  start_date TEXT,
+  exam_date TEXT,
+  study_days TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subjects (
@@ -202,7 +298,7 @@ CREATE TABLE IF NOT EXISTS day_allocations (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS pomodoro_sessions (
+CREATE TABLE IF NOT EXISTS focus_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
@@ -216,6 +312,7 @@ CREATE TABLE IF NOT EXISTS pomodoro_sessions (
   planning_minutes INTEGER NOT NULL DEFAULT 0,
   interrupts INTEGER NOT NULL DEFAULT 0 CHECK(interrupts >= 0),
   completion_rate REAL NOT NULL DEFAULT 0 CHECK(completion_rate >= 0 AND completion_rate <= 1),
+  zone TEXT NOT NULL DEFAULT 'baixa' CHECK(zone IN ('alta', 'media', 'baixa')),
   exit_reason TEXT CHECK(exit_reason IN ('fadiga_metabolica', 'distracao_externa', 'dificuldade_materia', 'meta_concluida') OR exit_reason IS NULL),
   completed INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('pending', 'partial', 'done', 'buffered')),
@@ -237,7 +334,7 @@ CREATE TABLE IF NOT EXISTS buffer_allocations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-  source_session_id INTEGER REFERENCES pomodoro_sessions(id) ON DELETE SET NULL,
+  source_session_id INTEGER REFERENCES focus_sessions(id) ON DELETE SET NULL,
   debt_minutes INTEGER NOT NULL CHECK(debt_minutes > 0),
   destination TEXT NOT NULL CHECK(destination IN ('saturday', 'next_week')),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'done', 'expired')),
@@ -265,7 +362,7 @@ CREATE TABLE IF NOT EXISTS spaced_repetition_items (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS review_logs (
+CREATE TABLE IF NOT EXISTS fsrs_reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL REFERENCES spaced_repetition_items(id) ON DELETE CASCADE,
   grade TEXT NOT NULL CHECK(grade IN ('again', 'hard', 'good', 'easy')),
@@ -279,10 +376,10 @@ CREATE INDEX IF NOT EXISTS idx_subjects_user ON subjects(user_id);
 CREATE INDEX IF NOT EXISTS idx_materials_user ON study_materials(user_id);
 CREATE INDEX IF NOT EXISTS idx_questions_user_date ON question_results(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_topics_subject ON topics(subject_id);
-CREATE INDEX IF NOT EXISTS idx_pomodoro_subject_started ON pomodoro_sessions(subject_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_focus_subject_started ON focus_sessions(subject_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_day_allocations_user ON day_allocations(user_id);
 CREATE INDEX IF NOT EXISTS idx_srs_items_user ON spaced_repetition_items(user_id);
-CREATE INDEX IF NOT EXISTS idx_review_logs_item ON review_logs(item_id, reviewed_at);
+CREATE INDEX IF NOT EXISTS idx_fsrs_reviews_item ON fsrs_reviews(item_id, reviewed_at);
 "#;
 
 fn seed(connection: &mut Connection) -> SqlResult<()> {
@@ -392,7 +489,7 @@ pub fn subject_by_id(connection: &Connection, id: i64) -> SqlResult<Subject> {
 }
 
 pub fn insert_subject(
-    connection: &Connection,
+    connection: &mut Connection,
     name: &str,
     weight: i64,
     difficulty: i64,
@@ -400,15 +497,17 @@ pub fn insert_subject(
     current_level: i64,
     target_level: i64,
 ) -> SqlResult<Subject> {
-    connection.execute(
-        "INSERT INTO subjects (user_id, name, weight, difficulty, color, current_level, target_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![DEFAULT_USER_ID, name, weight, difficulty, color, current_level, target_level],
-    )?;
-    subject_by_id(connection, connection.last_insert_rowid())
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO subjects (user_id, name, weight, difficulty, color, current_level, target_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![DEFAULT_USER_ID, name, weight, difficulty, color, current_level, target_level],
+        )?;
+        subject_by_id(connection, connection.last_insert_rowid())
+    })
 }
 
 pub fn update_subject(
-    connection: &Connection,
+    connection: &mut Connection,
     id: i64,
     name: &str,
     weight: i64,
@@ -417,26 +516,32 @@ pub fn update_subject(
     current_level: i64,
     target_level: i64,
 ) -> SqlResult<Subject> {
-    connection.execute(
-        "UPDATE subjects SET name = ?1, weight = ?2, difficulty = ?3, color = ?4, current_level = ?5, target_level = ?6 WHERE id = ?7 AND user_id = ?8",
-        params![name, weight, difficulty, color, current_level, target_level, id, DEFAULT_USER_ID],
-    )?;
-    subject_by_id(connection, id)
+    run_write(connection, |connection| {
+        connection.execute(
+            "UPDATE subjects SET name = ?1, weight = ?2, difficulty = ?3, color = ?4, current_level = ?5, target_level = ?6 WHERE id = ?7 AND user_id = ?8",
+            params![name, weight, difficulty, color, current_level, target_level, id, DEFAULT_USER_ID],
+        )?;
+        subject_by_id(connection, id)
+    })
 }
 
-pub fn delete_subject(connection: &Connection, id: i64) -> SqlResult<bool> {
-    Ok(connection.execute(
-        "DELETE FROM subjects WHERE id = ?1 AND user_id = ?2",
-        params![id, DEFAULT_USER_ID],
-    )? > 0)
+pub fn delete_subject(connection: &mut Connection, id: i64) -> SqlResult<bool> {
+    run_write(connection, |connection| {
+        Ok(connection.execute(
+            "DELETE FROM subjects WHERE id = ?1 AND user_id = ?2",
+            params![id, DEFAULT_USER_ID],
+        )? > 0)
+    })
 }
 
-pub fn update_subject_goals(connection: &Connection, id: i64, goal_accuracy: i64, goal_coverage: i64) -> SqlResult<Subject> {
-    connection.execute(
-        "UPDATE subjects SET goal_accuracy = ?1, goal_coverage = ?2 WHERE id = ?3 AND user_id = ?4",
-        params![goal_accuracy, goal_coverage, id, DEFAULT_USER_ID],
-    )?;
-    subject_by_id(connection, id)
+pub fn update_subject_goals(connection: &mut Connection, id: i64, goal_accuracy: i64, goal_coverage: i64) -> SqlResult<Subject> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "UPDATE subjects SET goal_accuracy = ?1, goal_coverage = ?2 WHERE id = ?3 AND user_id = ?4",
+            params![goal_accuracy, goal_coverage, id, DEFAULT_USER_ID],
+        )?;
+        subject_by_id(connection, id)
+    })
 }
 
 fn topic_from_row(row: &Row<'_>) -> SqlResult<Topic> {
@@ -472,27 +577,33 @@ fn topic_by_id(connection: &Connection, id: i64) -> SqlResult<Topic> {
     )
 }
 
-pub fn insert_topic(connection: &Connection, subject_id: i64, name: &str, status: &str) -> SqlResult<Topic> {
-    connection.execute(
-        "INSERT INTO topics (user_id, subject_id, name, status) VALUES (?1, ?2, ?3, ?4)",
-        params![DEFAULT_USER_ID, subject_id, name, status],
-    )?;
-    topic_by_id(connection, connection.last_insert_rowid())
+pub fn insert_topic(connection: &mut Connection, subject_id: i64, name: &str, status: &str) -> SqlResult<Topic> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO topics (user_id, subject_id, name, status) VALUES (?1, ?2, ?3, ?4)",
+            params![DEFAULT_USER_ID, subject_id, name, status],
+        )?;
+        topic_by_id(connection, connection.last_insert_rowid())
+    })
 }
 
-pub fn update_topic(connection: &Connection, id: i64, subject_id: i64, name: &str, status: &str) -> SqlResult<Topic> {
-    connection.execute(
-        "UPDATE topics SET subject_id = ?1, name = ?2, status = ?3 WHERE id = ?4 AND user_id = ?5",
-        params![subject_id, name, status, id, DEFAULT_USER_ID],
-    )?;
-    topic_by_id(connection, id)
+pub fn update_topic(connection: &mut Connection, id: i64, subject_id: i64, name: &str, status: &str) -> SqlResult<Topic> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "UPDATE topics SET subject_id = ?1, name = ?2, status = ?3 WHERE id = ?4 AND user_id = ?5",
+            params![subject_id, name, status, id, DEFAULT_USER_ID],
+        )?;
+        topic_by_id(connection, id)
+    })
 }
 
-pub fn delete_topic(connection: &Connection, id: i64) -> SqlResult<bool> {
-    Ok(connection.execute(
-        "DELETE FROM topics WHERE id = ?1 AND user_id = ?2",
-        params![id, DEFAULT_USER_ID],
-    )? > 0)
+pub fn delete_topic(connection: &mut Connection, id: i64) -> SqlResult<bool> {
+    run_write(connection, |connection| {
+        Ok(connection.execute(
+            "DELETE FROM topics WHERE id = ?1 AND user_id = ?2",
+            params![id, DEFAULT_USER_ID],
+        )? > 0)
+    })
 }
 
 fn allocation_from_row(row: &Row<'_>) -> SqlResult<DayAllocation> {
@@ -518,47 +629,61 @@ pub fn list_day_allocations(connection: &Connection) -> SqlResult<Vec<DayAllocat
     statement.query_map(params![DEFAULT_USER_ID], allocation_from_row)?.collect()
 }
 
-pub fn save_day_allocation(connection: &Connection, input: &DayAllocationInput) -> SqlResult<Vec<DayAllocation>> {
-    connection.execute(
-        "INSERT INTO day_allocations (user_id, subject_id, weekday, minutes, note)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(subject_id) DO UPDATE SET weekday = excluded.weekday, minutes = excluded.minutes,
-           note = excluded.note, created_at = CURRENT_TIMESTAMP",
-        params![DEFAULT_USER_ID, input.subject_id, input.weekday, input.minutes, input.note],
-    )?;
-    list_day_allocations(connection)
+pub fn save_day_allocation(connection: &mut Connection, input: &DayAllocationInput) -> SqlResult<Vec<DayAllocation>> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO day_allocations (user_id, subject_id, weekday, minutes, note)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(subject_id) DO UPDATE SET weekday = excluded.weekday, minutes = excluded.minutes,
+               note = excluded.note, created_at = CURRENT_TIMESTAMP",
+            params![DEFAULT_USER_ID, input.subject_id, input.weekday, input.minutes, input.note],
+        )?;
+        list_day_allocations(connection)
+    })
 }
 
-pub fn delete_day_allocation(connection: &Connection, subject_id: i64) -> SqlResult<Vec<DayAllocation>> {
-    connection.execute(
-        "DELETE FROM day_allocations WHERE subject_id = ?1 AND user_id = ?2",
-        params![subject_id, DEFAULT_USER_ID],
-    )?;
-    list_day_allocations(connection)
+pub fn delete_day_allocation(connection: &mut Connection, subject_id: i64) -> SqlResult<Vec<DayAllocation>> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "DELETE FROM day_allocations WHERE subject_id = ?1 AND user_id = ?2",
+            params![subject_id, DEFAULT_USER_ID],
+        )?;
+        list_day_allocations(connection)
+    })
 }
 
 pub fn get_profile(connection: &Connection) -> SqlResult<Profile> {
     connection.query_row(
-        "SELECT daily_hours, weekly_days, exam_track, start_date, exam_date FROM user_settings WHERE user_id = ?1",
+        "SELECT daily_hours, weekly_days, exam_track, start_date, exam_date, study_days FROM user_settings WHERE user_id = ?1",
         params![DEFAULT_USER_ID],
         |row| {
+            let weekly_days: i64 = row.get(1)?;
+            let study_days_raw: Option<String> = row.get(5)?;
+            let study_days = match study_days_raw {
+                Some(raw) if !raw.trim().is_empty() => serde_json::from_str(&raw).unwrap_or_default(),
+                _ => (0..weekly_days).collect(),
+            };
             Ok(Profile {
                 daily_hours: row.get(0)?,
-                weekly_days: row.get(1)?,
+                weekly_days,
                 exam_track: row.get(2)?,
                 start_date: row.get(3)?,
                 exam_date: row.get(4)?,
+                study_days,
             })
         },
     )
 }
 
-pub fn update_profile(connection: &Connection, profile: &ProfileInput) -> SqlResult<Profile> {
-    connection.execute(
-        "UPDATE user_settings SET daily_hours = ?1, weekly_days = ?2, exam_track = ?3, start_date = ?4, exam_date = ?5 WHERE user_id = ?6",
-        params![profile.daily_hours, profile.weekly_days, profile.exam_track, profile.start_date, profile.exam_date, DEFAULT_USER_ID],
-    )?;
-    get_profile(connection)
+pub fn update_profile(connection: &mut Connection, profile: &ProfileInput) -> SqlResult<Profile> {
+    run_write(connection, |connection| {
+        let study_days_json = serde_json::to_string(&profile.study_days).unwrap_or_else(|_| "[]".into());
+        connection.execute(
+            "UPDATE user_settings SET daily_hours = ?1, weekly_days = ?2, exam_track = ?3, start_date = ?4, exam_date = ?5, study_days = ?6 WHERE user_id = ?7",
+            params![profile.daily_hours, profile.weekly_days, profile.exam_track, profile.start_date, profile.exam_date, study_days_json, DEFAULT_USER_ID],
+        )?;
+        get_profile(connection)
+    })
 }
 
 fn material_from_row(row: &Row<'_>) -> SqlResult<StudyMaterial> {
@@ -595,37 +720,43 @@ pub fn list_materials(connection: &Connection) -> SqlResult<Vec<StudyMaterial>> 
         .collect()
 }
 
-pub fn insert_material(connection: &Connection, input: &MaterialInput) -> SqlResult<StudyMaterial> {
+pub fn insert_material(connection: &mut Connection, input: &MaterialInput) -> SqlResult<StudyMaterial> {
     let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".into());
     let study_strategy = resolve_strategy(connection, input);
-    connection.execute(
-        "INSERT INTO study_materials (user_id, subject_id, topic_id, title, category, url_path, status, tags_json, front, topic, page_focus, current_page, total_pages, remind_date, study_strategy)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        params![DEFAULT_USER_ID, input.subject_id, input.topic_id, input.title, input.category, input.url_path, input.status, tags_json, input.front, input.topic, input.page_focus, input.current_page, input.total_pages, input.remind_date, study_strategy],
-    )?;
-    material_by_id(connection, connection.last_insert_rowid())
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO study_materials (user_id, subject_id, topic_id, title, category, url_path, status, tags_json, front, topic, page_focus, current_page, total_pages, remind_date, study_strategy)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![DEFAULT_USER_ID, input.subject_id, input.topic_id, input.title, input.category, input.url_path, input.status, tags_json, input.front, input.topic, input.page_focus, input.current_page, input.total_pages, input.remind_date, study_strategy],
+        )?;
+        material_by_id(connection, connection.last_insert_rowid())
+    })
 }
 
-pub fn update_material(connection: &Connection, id: i64, input: &MaterialInput) -> SqlResult<StudyMaterial> {
+pub fn update_material(connection: &mut Connection, id: i64, input: &MaterialInput) -> SqlResult<StudyMaterial> {
     let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".into());
     let study_strategy = resolve_strategy(connection, input);
-    connection.execute(
-        "UPDATE study_materials SET subject_id = ?1, topic_id = ?2, title = ?3, category = ?4, url_path = ?5, status = ?6, tags_json = ?7,
-           front = ?8, topic = ?9, page_focus = ?10, current_page = ?11, total_pages = ?12, remind_date = ?13, study_strategy = ?14
-         WHERE id = ?15 AND user_id = ?16",
-        params![input.subject_id, input.topic_id, input.title, input.category, input.url_path, input.status, tags_json,
-                input.front, input.topic, input.page_focus, input.current_page, input.total_pages, input.remind_date, study_strategy, id, DEFAULT_USER_ID],
-    )?;
-    material_by_id(connection, id)
+    run_write(connection, |connection| {
+        connection.execute(
+            "UPDATE study_materials SET subject_id = ?1, topic_id = ?2, title = ?3, category = ?4, url_path = ?5, status = ?6, tags_json = ?7,
+               front = ?8, topic = ?9, page_focus = ?10, current_page = ?11, total_pages = ?12, remind_date = ?13, study_strategy = ?14
+             WHERE id = ?15 AND user_id = ?16",
+            params![input.subject_id, input.topic_id, input.title, input.category, input.url_path, input.status, tags_json,
+                    input.front, input.topic, input.page_focus, input.current_page, input.total_pages, input.remind_date, study_strategy, id, DEFAULT_USER_ID],
+        )?;
+        material_by_id(connection, id)
+    })
 }
 
-pub fn update_material_page(connection: &Connection, id: i64, current_page: i64) -> SqlResult<StudyMaterial> {
-    connection.execute(
-        "UPDATE study_materials SET current_page = ?1, status = CASE WHEN ?1 > 0 AND total_pages > 0 AND ?1 >= total_pages THEN 'concluido' ELSE status END
-         WHERE id = ?2 AND user_id = ?3",
-        params![current_page, id, DEFAULT_USER_ID],
-    )?;
-    material_by_id(connection, id)
+pub fn update_material_page(connection: &mut Connection, id: i64, current_page: i64) -> SqlResult<StudyMaterial> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "UPDATE study_materials SET current_page = ?1, status = CASE WHEN ?1 > 0 AND total_pages > 0 AND ?1 >= total_pages THEN 'concluido' ELSE status END
+             WHERE id = ?2 AND user_id = ?3",
+            params![current_page, id, DEFAULT_USER_ID],
+        )?;
+        material_by_id(connection, id)
+    })
 }
 
 fn material_by_id(connection: &Connection, id: i64) -> SqlResult<StudyMaterial> {
@@ -636,53 +767,59 @@ fn material_by_id(connection: &Connection, id: i64) -> SqlResult<StudyMaterial> 
     )
 }
 
-pub fn delete_material(connection: &Connection, id: i64) -> SqlResult<bool> {
-    Ok(connection.execute(
-        "DELETE FROM study_materials WHERE id = ?1 AND user_id = ?2",
-        params![id, DEFAULT_USER_ID],
-    )? > 0)
+pub fn delete_material(connection: &mut Connection, id: i64) -> SqlResult<bool> {
+    run_write(connection, |connection| {
+        Ok(connection.execute(
+            "DELETE FROM study_materials WHERE id = ?1 AND user_id = ?2",
+            params![id, DEFAULT_USER_ID],
+        )? > 0)
+    })
 }
 
-pub fn insert_question_result(connection: &Connection, input: &QuestionResultInput) -> SqlResult<QuestionResult> {
-    connection.execute(
-        "INSERT INTO question_results (user_id, subject_id, topic_id, date, questions_total, questions_correct, studied_minutes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            DEFAULT_USER_ID,
-            input.subject_id,
-            input.topic_id,
-            input.date,
-            input.questions_total,
-            input.questions_correct,
-            input.studied_minutes
-        ],
-    )?;
-    let id = connection.last_insert_rowid();
-    connection.query_row(
-        "SELECT qr.id, qr.subject_id, qr.topic_id, qr.date, qr.questions_total, qr.questions_correct, qr.studied_minutes
-         FROM question_results qr WHERE qr.id = ?1",
-        params![id],
-        |row| Ok(QuestionResult {
-            id: row.get(0)?,
-            subject_id: row.get(1)?,
-            topic_id: row.get(2)?,
-            date: row.get(3)?,
-            questions_total: row.get(4)?,
-            questions_correct: row.get(5)?,
-            studied_minutes: row.get(6)?,
-        }),
-    )
+pub fn insert_question_result(connection: &mut Connection, input: &QuestionResultInput) -> SqlResult<QuestionResult> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO question_results (user_id, subject_id, topic_id, date, questions_total, questions_correct, studied_minutes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                DEFAULT_USER_ID,
+                input.subject_id,
+                input.topic_id,
+                input.date,
+                input.questions_total,
+                input.questions_correct,
+                input.studied_minutes
+            ],
+        )?;
+        let id = connection.last_insert_rowid();
+        connection.query_row(
+            "SELECT qr.id, qr.subject_id, qr.topic_id, qr.date, qr.questions_total, qr.questions_correct, qr.studied_minutes
+             FROM question_results qr WHERE qr.id = ?1",
+            params![id],
+            |row| Ok(QuestionResult {
+                id: row.get(0)?,
+                subject_id: row.get(1)?,
+                topic_id: row.get(2)?,
+                date: row.get(3)?,
+                questions_total: row.get(4)?,
+                questions_correct: row.get(5)?,
+                studied_minutes: row.get(6)?,
+            }),
+        )
+    })
 }
 
-pub fn save_daily_log(connection: &Connection, date: &str, total_hours: f64, allocation_data: &str) -> SqlResult<()> {
-    connection.execute(
-        "INSERT INTO daily_logs (user_id, date, total_hours_available, allocated_data_json)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(user_id, date) DO UPDATE SET total_hours_available = excluded.total_hours_available,
-           allocated_data_json = excluded.allocated_data_json, created_at = CURRENT_TIMESTAMP",
-        params![DEFAULT_USER_ID, date, total_hours, allocation_data],
-    )?;
-    Ok(())
+pub fn save_daily_log(connection: &mut Connection, date: &str, total_hours: f64, allocation_data: &str) -> SqlResult<()> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO daily_logs (user_id, date, total_hours_available, allocated_data_json)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(user_id, date) DO UPDATE SET total_hours_available = excluded.total_hours_available,
+               allocated_data_json = excluded.allocated_data_json, created_at = CURRENT_TIMESTAMP",
+            params![DEFAULT_USER_ID, date, total_hours, allocation_data],
+        )?;
+        Ok(())
+    })
 }
 
 pub fn dashboard(connection: &Connection) -> SqlResult<DashboardData> {
@@ -805,7 +942,7 @@ pub fn focus_overload_trend(connection: &Connection) -> SqlResult<Vec<FocusOverl
                 SUM(p.planned_minutes) AS planned,
                 SUM(p.elapsed_minutes) AS elapsed,
                 SUM(CASE WHEN p.completed = 1 AND p.interrupts = 0 AND p.exit_reason IS NULL THEN 1 ELSE 0 END) AS deep
-         FROM pomodoro_sessions p JOIN subjects s ON s.id = p.subject_id
+         FROM focus_sessions p JOIN subjects s ON s.id = p.subject_id
          WHERE p.user_id = ?1 AND substr(p.started_at, 1, 10) >= date('now', '-29 days')
          GROUP BY p.subject_id, day
          ORDER BY day ASC, s.name COLLATE NOCASE",
@@ -1160,7 +1297,7 @@ pub fn suggest_focus_timebox(
     let mut statement = connection.prepare(
         "SELECT planned_minutes, completed, exit_reason, elapsed_minutes,
                 planned_minutes AS planned
-         FROM pomodoro_sessions
+         FROM focus_sessions
          WHERE user_id = ?1 AND subject_id = ?2
          ORDER BY started_at DESC
          LIMIT 8",
@@ -1235,8 +1372,8 @@ pub fn suggest_focus_timebox(
     })
 }
 
-fn pomodoro_from_row(row: &Row<'_>, subject_name: &str, color: &str, material_title: Option<&str>) -> SqlResult<PomodoroSession> {
-    Ok(PomodoroSession {
+fn focus_from_row(row: &Row<'_>, subject_name: &str, color: &str, material_title: Option<&str>) -> SqlResult<FocusSession> {
+    Ok(FocusSession {
         id: row.get("id")?,
         subject_id: row.get("subject_id")?,
         subject_name: subject_name.to_string(),
@@ -1251,6 +1388,7 @@ fn pomodoro_from_row(row: &Row<'_>, subject_name: &str, color: &str, material_ti
         elapsed_minutes: row.get("elapsed_minutes")?,
         interrupts: row.get("interrupts")?,
         completion_rate: row.get("completion_rate")?,
+        zone: FocusZone::from_db(&row.get::<_, String>("zone")?),
         exit_reason: row.get("exit_reason")?,
         completed: row.get("completed")?,
         status: row.get("status")?,
@@ -1259,13 +1397,13 @@ fn pomodoro_from_row(row: &Row<'_>, subject_name: &str, color: &str, material_ti
     })
 }
 
-pub fn list_pomodoro_sessions(connection: &Connection) -> SqlResult<Vec<PomodoroSession>> {
+pub fn list_focus_sessions(connection: &Connection) -> SqlResult<Vec<FocusSession>> {
     let mut statement = connection.prepare(
         "SELECT s.id, s.user_id, s.subject_id, s.material_id, s.goal_type, s.goal_text,
                 s.page_start, s.page_end, s.planned_minutes, s.elapsed_minutes, s.interrupts,
-                s.completion_rate, s.exit_reason, s.completed, s.status, s.completion_percentage, s.started_at,
+                s.completion_rate, s.zone, s.exit_reason, s.completed, s.status, s.completion_percentage, s.started_at,
                 sub.name AS subject_name, sub.color, m.title AS material_title
-         FROM pomodoro_sessions s
+         FROM focus_sessions s
          JOIN subjects sub ON sub.id = s.subject_id
          LEFT JOIN study_materials m ON m.id = s.material_id
          WHERE s.user_id = ?1
@@ -1274,33 +1412,29 @@ pub fn list_pomodoro_sessions(connection: &Connection) -> SqlResult<Vec<Pomodoro
     )?;
     statement
         .query_map(params![DEFAULT_USER_ID], |row| {
-            pomodoro_from_row(row, &row.get::<_, String>("subject_name")?, &row.get::<_, String>("color")?, row.get::<_, Option<String>>("material_title")?.as_deref())
+            focus_from_row(row, &row.get::<_, String>("subject_name")?, &row.get::<_, String>("color")?, row.get::<_, Option<String>>("material_title")?.as_deref())
         })?
         .collect()
 }
 
-pub fn complete_pomodoro_session(
+/// Query preparada do insert na tabela `focus_sessions`. Retorna o id da sessão.
+fn insert_focus_session(
     connection: &Connection,
-    input: &PomodoroSessionInput,
-) -> SqlResult<SessionSummary> {
-    let subject = subject_by_id(connection, input.subject_id)?;
-    let completion_rate = clamp01(input.elapsed_minutes as f64 / input.planned_minutes.max(1) as f64);
-    let finished_goal_early = input.exit_reason.as_deref() == Some("meta_concluida");
-    let completed = completion_rate >= 1.0 || finished_goal_early;
-    let status = if completed { "done" } else { "partial" };
-    let ended_at = chrono::Local::now().date_naive().to_string();
-    let completion_percentage = match input.completion_percentage {
-        Some(value) => value.clamp(0.0, 100.0),
-        None if completed => 100.0,
-        None => completion_rate * 100.0,
-    };
-
+    input: &FocusSessionInput,
+    completion_rate: f64,
+    completed: bool,
+    status: &str,
+    completion_percentage: f64,
+    started_at: &str,
+    ended_at: &str,
+    zone: FocusZone,
+) -> SqlResult<i64> {
     connection.execute(
-        "INSERT INTO pomodoro_sessions
+        "INSERT INTO focus_sessions
             (user_id, subject_id, material_id, goal_type, goal_text, page_start, page_end,
-             planned_minutes, elapsed_minutes, interrupts, completion_rate, exit_reason,
+             planned_minutes, elapsed_minutes, interrupts, completion_rate, zone, exit_reason,
              completed, status, completion_percentage, started_at, ended_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             DEFAULT_USER_ID,
             input.subject_id,
@@ -1313,69 +1447,105 @@ pub fn complete_pomodoro_session(
             input.elapsed_minutes,
             input.interrupts,
             round2(completion_rate),
+            zone.as_db(),
             input.exit_reason,
             completed,
             status,
             round1(completion_percentage),
-            input.started_at,
+            started_at,
             ended_at
         ],
     )?;
+    Ok(connection.last_insert_rowid())
+}
 
-    if let (Some(material_id), Some(page_end)) = (input.material_id, input.page_end) {
-        if page_end > 0 {
-            connection.execute(
-                "UPDATE study_materials SET current_page = MAX(current_page, ?1) WHERE id = ?2 AND user_id = ?3",
-                params![page_end, material_id, DEFAULT_USER_ID],
-            )?;
+pub fn complete_focus_session(
+    connection: &mut Connection,
+    input: &FocusSessionInput,
+) -> SqlResult<SessionSummary> {
+    run_write(connection, |connection| {
+        let subject = subject_by_id(connection, input.subject_id)?;
+        let completion_rate = clamp01(input.elapsed_minutes as f64 / input.planned_minutes.max(1) as f64);
+        let finished_goal_early = input.exit_reason.as_deref() == Some("meta_concluida");
+        let completed = completion_rate >= 1.0 || finished_goal_early;
+        let status = if completed { "done" } else { "partial" };
+        let ended_at = chrono::Local::now().date_naive().to_string();
+        let completion_percentage = match input.completion_percentage {
+            Some(value) => value.clamp(0.0, 100.0),
+            None if completed => 100.0,
+            None => completion_rate * 100.0,
+        };
+        let zone = FocusZone::from_completion_rate(completion_rate);
+
+        insert_focus_session(
+            connection,
+            input,
+            completion_rate,
+            completed,
+            status,
+            completion_percentage,
+            &input.started_at,
+            &ended_at,
+            zone,
+        )?;
+
+        if let (Some(material_id), Some(page_end)) = (input.material_id, input.page_end) {
+            if page_end > 0 {
+                connection.execute(
+                    "UPDATE study_materials SET current_page = MAX(current_page, ?1) WHERE id = ?2 AND user_id = ?3",
+                    params![page_end, material_id, DEFAULT_USER_ID],
+                )?;
+            }
         }
-    }
 
-    let suggestion = suggest_focus_timebox(connection, input.subject_id)?;
-    let deep_work = completion_rate >= 1.0 && input.interrupts == 0 && input.exit_reason.is_none();
-    let efficiency_gain = if deep_work && input.elapsed_minutes > 0 {
-        apply_efficiency_learning(connection, input.subject_id)?
-    } else {
-        None
-    };
+        let suggestion = suggest_focus_timebox(connection, input.subject_id)?;
+        let deep_work = completion_rate >= 1.0 && input.interrupts == 0 && input.exit_reason.is_none();
+        let efficiency_gain = if deep_work && input.elapsed_minutes > 0 {
+            apply_efficiency_learning(connection, input.subject_id)?
+        } else {
+            None
+        };
 
-    Ok(SessionSummary {
-        subject_id: input.subject_id,
-        subject_name: subject.name,
-        planned_minutes: input.planned_minutes,
-        elapsed_minutes: input.elapsed_minutes,
-        interrupts: input.interrupts,
-        completion_rate: round2(completion_rate),
-        exit_reason: input.exit_reason.clone(),
-        completion_percentage: Some(round1(completion_percentage)),
-        deep_work,
-        suggested_next: suggestion.suggested_minutes,
-        suggestion_reason: suggestion.reason,
-        efficiency_gain,
+        Ok(SessionSummary {
+            subject_id: input.subject_id,
+            subject_name: subject.name,
+            planned_minutes: input.planned_minutes,
+            elapsed_minutes: input.elapsed_minutes,
+            interrupts: input.interrupts,
+            completion_rate: round2(completion_rate),
+            exit_reason: input.exit_reason.clone(),
+            completion_percentage: Some(round1(completion_percentage)),
+            deep_work,
+            suggested_next: suggestion.suggested_minutes,
+            suggestion_reason: suggestion.reason,
+            efficiency_gain,
+        })
     })
 }
 
-pub fn log_brain_dump(connection: &Connection, input: &BrainDumpLogInput) -> SqlResult<BrainDumpLog> {
-    connection.execute(
-        "INSERT INTO brain_dump_logs (user_id, subject_id, note) VALUES (?1, ?2, ?3)",
-        params![DEFAULT_USER_ID, input.subject_id, input.note],
-    )?;
-    connection.query_row(
-        "SELECT d.id, d.subject_id, d.note, d.created_at, sub.name AS subject_name
-         FROM brain_dump_logs d
-         LEFT JOIN subjects sub ON sub.id = d.subject_id
-         WHERE d.id = ?1 AND d.user_id = ?2",
-        params![connection.last_insert_rowid(), DEFAULT_USER_ID],
-        |row| {
-            Ok(BrainDumpLog {
-                id: row.get(0)?,
-                subject_id: row.get(1)?,
-                subject_name: row.get(2)?,
-                note: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        },
-    )
+pub fn log_brain_dump(connection: &mut Connection, input: &BrainDumpLogInput) -> SqlResult<BrainDumpLog> {
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO brain_dump_logs (user_id, subject_id, note) VALUES (?1, ?2, ?3)",
+            params![DEFAULT_USER_ID, input.subject_id, input.note],
+        )?;
+        connection.query_row(
+            "SELECT d.id, d.subject_id, d.note, d.created_at, sub.name AS subject_name
+             FROM brain_dump_logs d
+             LEFT JOIN subjects sub ON sub.id = d.subject_id
+             WHERE d.id = ?1 AND d.user_id = ?2",
+            params![connection.last_insert_rowid(), DEFAULT_USER_ID],
+            |row| {
+                Ok(BrainDumpLog {
+                    id: row.get(0)?,
+                    subject_id: row.get(1)?,
+                    subject_name: row.get(2)?,
+                    note: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+    })
 }
 
 pub fn list_brain_dumps(connection: &Connection) -> SqlResult<Vec<BrainDumpLog>> {
@@ -1406,7 +1576,7 @@ pub fn learning_speed(connection: &Connection, subject_id: Option<i64>) -> SqlRe
                 SUM(s.elapsed_minutes) AS minutes_total,
                 SUM(CASE WHEN s.goal_type = 'paginas' THEN MAX(s.page_end - s.page_start, 0) ELSE 0 END) AS pages_done,
                 SUM(CASE WHEN s.goal_type = 'exercicios' THEN 1 ELSE 0 END) AS exercises_done
-         FROM pomodoro_sessions s
+         FROM focus_sessions s
          LEFT JOIN study_materials m ON m.id = s.material_id
          WHERE s.user_id = ?1 {0}
          GROUP BY s.material_id
@@ -1473,7 +1643,11 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
 
     let horizon_days = (exam - start).num_days();
     let weeks = (horizon_days.max(1) / 7).max(1);
-    let daily_minutes = ((input.total_hours.clamp(0.5, 24.0) * 60.0) / 5.0 / 5.0).round() as i64;
+    // total_hours chega como carga SEMANAL (diário × dias/semana no wizard).
+    // Distribui essa carga pelos dias do horizonte, em blocos de 5, sem cortar.
+    let total_days = (horizon_days + 1).max(1) as f64;
+    let weekly_minutes = input.total_hours.clamp(0.5, 24.0 * 7.0) * 60.0;
+    let daily_minutes = (weekly_minutes * weeks as f64 / total_days / 5.0).round() as i64 * 5;
     let daily_minutes = daily_minutes.max(5);
 
     let subjects = list_subjects(connection)?;
@@ -1493,30 +1667,44 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
         let date = start + Duration::days(offset as i64);
         let weekday = date.weekday().num_days_from_monday() as usize;
         let early_window = weekday <= 2;
-        let (id0, name0, color0, risk0) = &risk[0];
-        let primary = (daily_minutes as f64 * if early_window { 0.6 } else { 0.5 }).round() as i64;
-        let primary = (primary / 5 * 5).max(15);
+        let primary_minutes = (daily_minutes as f64 * if early_window { 0.6 } else { 0.5 }).round() as i64;
+        let primary_minutes = (primary_minutes / 5 * 5).max(15);
+
+        // Rotação sem repetição: o bloco principal gira por todas as matérias
+        // ordenadas por risco (IP + déficit de nível) em vez de repetir as de
+        // maior escore todos os dias. Sem matérias, a rota fica vazia.
+        let subject_count = risk.len();
+        if subject_count == 0 {
+            return Ok(PlanResponse {
+                weeks,
+                risk_name: None,
+                days,
+            });
+        }
+        let primary_index = offset % subject_count;
+        let (id0, name0, color0, risk0) = &risk[primary_index];
+        let secondary_index = (offset * 2 + 1) % subject_count;
 
         let mut focus = vec![PlanFocus {
             subject_id: *id0,
             subject_name: name0.clone(),
             color: color0.clone(),
             risk: *risk0,
-            minutes: primary,
+            minutes: primary_minutes,
             slot: if early_window {
                 "Janela matutina · aquecimento pós-sono".to_string()
             } else {
                 "Bloco principal".to_string()
             },
         }];
-        if risk.len() > 1 && daily_minutes - primary >= 10 {
-            let (id1, name1, color1, risk1) = &risk[1];
+        if subject_count > 1 && secondary_index != primary_index && daily_minutes - primary_minutes >= 10 {
+            let (id1, name1, color1, risk1) = &risk[secondary_index];
             focus.push(PlanFocus {
                 subject_id: *id1,
                 subject_name: name1.clone(),
                 color: color1.clone(),
                 risk: *risk1,
-                minutes: daily_minutes - primary,
+                minutes: daily_minutes - primary_minutes,
                 slot: if early_window {
                     "Segundo alvo · alternância".to_string()
                 } else {
@@ -1540,7 +1728,7 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
 
 fn apply_efficiency_learning(connection: &Connection, subject_id: i64) -> SqlResult<Option<String>> {
     let faster_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM pomodoro_sessions
+        "SELECT COUNT(*) FROM focus_sessions
          WHERE user_id = ?1 AND subject_id = ?2 AND status = 'done'
            AND elapsed_minutes > 0 AND elapsed_minutes * 100 < planned_minutes * 85
            AND substr(started_at, 1, 10) >= date('now', '-14 days')",
@@ -1575,94 +1763,96 @@ fn apply_efficiency_learning(connection: &Connection, subject_id: i64) -> SqlRes
 /// e o realoca — sem efeito dominó — em `Project Buffers`: primeiro Sábado à
 /// tarde (bloco de contenção), depois na semana seguinte. Manhãs de hiperfoco
 /// são protegidas.
-pub fn reschedule_buffer(connection: &Connection) -> SqlResult<ReschedulePlan> {
-    let generated_date = chrono::Local::now().date_naive().to_string();
-    let profile = get_profile(connection)?;
-    let saturday_capacity = (profile.daily_hours * 60.0 * 0.5).round().max(60.0) as i64;
+pub fn reschedule_buffer(connection: &mut Connection) -> SqlResult<ReschedulePlan> {
+    run_write(connection, |connection| {
+        let generated_date = today_iso();
+        let profile = get_profile(connection)?;
+        let saturday_capacity = (profile.daily_hours * 60.0 * 0.5).round().max(60.0) as i64;
 
-    let mut statement = connection.prepare(
-        "SELECT id, subject_id, goal_text, planned_minutes, elapsed_minutes
-         FROM pomodoro_sessions
-         WHERE user_id = ?1 AND status IN ('partial', 'pending', 'buffered')
-           AND substr(started_at, 1, 10) >= date('now', '-7 days')
-         ORDER BY started_at ASC",
-    )?;
-    let tasks: Vec<(i64, i64, Option<String>, i64, i64)> = statement
-        .query_map(params![DEFAULT_USER_ID], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-        })?
-        .collect::<SqlResult<Vec<_>>>()?;
+        let mut statement = connection.prepare(
+            "SELECT id, subject_id, goal_text, planned_minutes, elapsed_minutes
+             FROM focus_sessions
+             WHERE user_id = ?1 AND status IN ('partial', 'pending', 'buffered')
+               AND substr(started_at, 1, 10) >= date('now', '-7 days')
+             ORDER BY started_at ASC",
+        )?;
+        let tasks: Vec<(i64, i64, Option<String>, i64, i64)> = statement
+            .query_map(params![DEFAULT_USER_ID], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
 
-    let mut debt_by_subject: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
-    let mut items: Vec<(i64, i64, Option<String>, i64, i64, i64)> = Vec::new();
-    for (id, subject_id, goal, planned, elapsed) in &tasks {
-        let debt = (planned - elapsed).max(0);
-        if debt == 0 {
-            connection.execute(
-                "UPDATE pomodoro_sessions SET status = 'done' WHERE id = ?1",
-                params![id],
-            )?;
-            continue;
+        let mut debt_by_subject: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        let mut items: Vec<(i64, i64, Option<String>, i64, i64, i64)> = Vec::new();
+        for (id, subject_id, goal, planned, elapsed) in &tasks {
+            let debt = (planned - elapsed).max(0);
+            if debt == 0 {
+                connection.execute(
+                    "UPDATE focus_sessions SET status = 'done' WHERE id = ?1",
+                    params![id],
+                )?;
+                continue;
+            }
+            *debt_by_subject.entry(*subject_id).or_insert(0) += debt;
+            items.push((*id, *subject_id, goal.clone(), *planned, *elapsed, debt));
         }
-        *debt_by_subject.entry(*subject_id).or_insert(0) += debt;
-        items.push((*id, *subject_id, goal.clone(), *planned, *elapsed, debt));
-    }
 
-    let mut saturday_total = 0i64;
-    let mut next_week_total = 0i64;
-    let mut resolved: Vec<(i64, i64, Option<String>, i64, i64, i64, &'static str)> = Vec::new();
-    connection.execute(
-        "DELETE FROM buffer_allocations WHERE user_id = ?1 AND status = 'queued'",
-        params![DEFAULT_USER_ID],
-    )?;
-    for (id, subject_id, goal, planned, elapsed, debt) in items {
-        let destination: &'static str = if saturday_total + debt <= saturday_capacity {
-            saturday_total += debt;
-            "saturday"
-        } else {
-            next_week_total += debt;
-            "next_week"
-        };
+        let mut saturday_total = 0i64;
+        let mut next_week_total = 0i64;
+        let mut resolved: Vec<(i64, i64, Option<String>, i64, i64, i64, &'static str)> = Vec::new();
         connection.execute(
-            "INSERT INTO buffer_allocations (user_id, subject_id, source_session_id, debt_minutes, destination)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![DEFAULT_USER_ID, subject_id, id, debt, destination],
+            "DELETE FROM buffer_allocations WHERE user_id = ?1 AND status = 'queued'",
+            params![DEFAULT_USER_ID],
         )?;
-        connection.execute(
-            "UPDATE pomodoro_sessions SET status = 'buffered' WHERE id = ?1 AND user_id = ?2",
-            params![id, DEFAULT_USER_ID],
-        )?;
-        resolved.push((id, subject_id, goal, planned, elapsed, debt, destination));
-    }
-
-    let mut items_triaged: Vec<RescheduleItem> = Vec::new();
-    for (id, subject_id, goal, planned, elapsed, debt, destination) in resolved {
-        let subject = subject_by_id(connection, subject_id)?;
-        items_triaged.push(RescheduleItem {
-            source_session_id: id,
-            subject_id,
-            subject_name: subject.name.clone(),
-            color: subject.color,
-            goal,
-            planned_minutes: planned,
-            executed_minutes: elapsed,
-            debt_minutes: debt,
-            destination: destination.to_string(),
-            destination_label: if destination == "saturday" {
-                "Sábado à tarde · Project Buffer".to_string()
+        for (id, subject_id, goal, planned, elapsed, debt) in items {
+            let destination: &'static str = if saturday_total + debt <= saturday_capacity {
+                saturday_total += debt;
+                "saturday"
             } else {
-                "Semana seguinte · redistribuição".to_string()
-            },
-        });
-    }
+                next_week_total += debt;
+                "next_week"
+            };
+            connection.execute(
+                "INSERT INTO buffer_allocations (user_id, subject_id, source_session_id, debt_minutes, destination)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![DEFAULT_USER_ID, subject_id, id, debt, destination],
+            )?;
+            connection.execute(
+                "UPDATE focus_sessions SET status = 'buffered' WHERE id = ?1 AND user_id = ?2",
+                params![id, DEFAULT_USER_ID],
+            )?;
+            resolved.push((id, subject_id, goal, planned, elapsed, debt, destination));
+        }
 
-    Ok(ReschedulePlan {
-        generated_date,
-        total_debt_minutes: debt_by_subject.values().sum(),
-        saturday_minutes: saturday_total,
-        next_week_minutes: next_week_total,
-        protected_morning_hours: profile.weekly_days,
-        items: items_triaged,
+        let mut items_triaged: Vec<RescheduleItem> = Vec::new();
+        for (id, subject_id, goal, planned, elapsed, debt, destination) in resolved {
+            let subject = subject_by_id(connection, subject_id)?;
+            items_triaged.push(RescheduleItem {
+                source_session_id: id,
+                subject_id,
+                subject_name: subject.name.clone(),
+                color: subject.color,
+                goal,
+                planned_minutes: planned,
+                executed_minutes: elapsed,
+                debt_minutes: debt,
+                destination: destination.to_string(),
+                destination_label: if destination == "saturday" {
+                    "Sábado à tarde · Project Buffer".to_string()
+                } else {
+                    "Semana seguinte · redistribuição".to_string()
+                },
+            });
+        }
+
+        Ok(ReschedulePlan {
+            generated_date,
+            total_debt_minutes: debt_by_subject.values().sum(),
+            saturday_minutes: saturday_total,
+            next_week_minutes: next_week_total,
+            protected_morning_hours: profile.weekly_days,
+            items: items_triaged,
+        })
     })
 }
 
@@ -1672,7 +1862,7 @@ pub fn list_buffer_allocations(connection: &Connection) -> SqlResult<Vec<BufferA
                 b.destination, b.status, b.created_at
          FROM buffer_allocations b
          JOIN subjects sub ON sub.id = b.subject_id
-         LEFT JOIN pomodoro_sessions s ON s.id = b.source_session_id
+         LEFT JOIN focus_sessions s ON s.id = b.source_session_id
          WHERE b.user_id = ?1
          ORDER BY b.created_at DESC
          LIMIT 50",
@@ -1696,57 +1886,10 @@ pub fn list_buffer_allocations(connection: &Connection) -> SqlResult<Vec<BufferA
 
 /* ---------------------------------------------------------------- */
 /* Motor de Repetição Espaçada (modelo FSRS simplificado)            */
+/* As fórmulas (today_iso, calculate_retrievability, due_date_iso,   */
+/* grade_multiplier, grade_label, difficulty_scale...) vivem em       */
+/* scheduler.rs; database.rs apenas importa.                          */
 /* ---------------------------------------------------------------- */
-
-fn today_iso() -> String {
-    chrono::Local::now().date_naive().to_string()
-}
-
-fn parse_date(value: &str) -> chrono::NaiveDate {
-    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .unwrap_or_else(|_| chrono::Local::now().date_naive())
-}
-
-fn days_since(from: &str, to: &str) -> f64 {
-    (parse_date(to) - parse_date(from)).num_days() as f64
-}
-
-/// R(t) = (1 + t / (9 * S))^-1
-/// R = probabilidade de lembrança; S = Stability em dias (R cai a 90% em t = S).
-pub fn calculate_retrievability(stability: f64, elapsed_days: f64) -> f64 {
-    let stability = stability.max(0.01);
-    let value = 1.0 / (1.0 + elapsed_days.max(0.0) / (9.0 * stability));
-    value.clamp(0.0, 1.0)
-}
-
-fn due_date_iso(last_review: &str, stability: f64) -> String {
-    let days = stability.round().max(1.0) as i64;
-    (parse_date(last_review) + chrono::Duration::days(days)).to_string()
-}
-
-fn grade_multiplier(grade: &str) -> f64 {
-    match grade {
-        "again" => 0.8,
-        "hard" => 1.2,
-        "good" => 2.2,
-        "easy" => 3.0,
-        _ => 2.2,
-    }
-}
-
-fn grade_label(grade: &str) -> String {
-    match grade {
-        "again" => "Errei".into(),
-        "hard" => "Difícil".into(),
-        "good" => "Bom".into(),
-        "easy" => "Fácil".into(),
-        _ => "Bom".into(),
-    }
-}
-
-fn difficulty_scale(difficulty: f64) -> f64 {
-    0.9 + (10.0 - difficulty.clamp(1.0, 10.0)) * 0.02
-}
 
 struct SrsRow {
     id: i64,
@@ -1834,71 +1977,93 @@ pub fn list_memory_items(connection: &Connection) -> SqlResult<Vec<SpacedRepetit
     Ok(rows.iter().map(finish_item).collect())
 }
 
-pub fn insert_memory_item(
+/// Query preparada do insert na tabela `fsrs_reviews`. Retorna o id da revisão.
+fn insert_fsrs_review(
     connection: &Connection,
+    item_id: i64,
+    grade: &str,
+    stability_before: f64,
+    stability_after: f64,
+    retrievability: f64,
+) -> SqlResult<i64> {
+    connection.execute(
+        "INSERT INTO fsrs_reviews (item_id, grade, stability_before, stability_after, retrievability)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![item_id, grade, stability_before, stability_after, retrievability],
+    )?;
+    Ok(connection.last_insert_rowid())
+}
+
+pub fn insert_memory_item(
+    connection: &mut Connection,
     subject_id: Option<i64>,
     topic_id: Option<i64>,
     concept: &str,
     difficulty: f64,
 ) -> SqlResult<SpacedRepetitionItem> {
-    connection.execute(
-        "INSERT INTO spaced_repetition_items (user_id, subject_id, topic_id, concept, difficulty, stability, reps, last_review_date)
-         VALUES (?1, ?2, ?3, ?4, ?5, 1.0, 0, ?6)",
-        params![
-            DEFAULT_USER_ID,
-            subject_id,
-            topic_id,
-            concept,
-            difficulty,
-            today_iso()
-        ],
-    )?;
-    memory_item_by_id(connection, connection.last_insert_rowid())
+    let concept = concept.to_string();
+    run_write(connection, |connection| {
+        connection.execute(
+            "INSERT INTO spaced_repetition_items (user_id, subject_id, topic_id, concept, difficulty, stability, reps, last_review_date)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1.0, 0, ?6)",
+            params![
+                DEFAULT_USER_ID,
+                subject_id,
+                topic_id,
+                concept,
+                difficulty,
+                today_iso()
+            ],
+        )?;
+        memory_item_by_id(connection, connection.last_insert_rowid())
+    })
 }
 
-pub fn delete_memory_item(connection: &Connection, id: i64) -> SqlResult<bool> {
-    Ok(connection.execute(
-        "DELETE FROM spaced_repetition_items WHERE id = ?1 AND user_id = ?2",
-        params![id, DEFAULT_USER_ID],
-    )? > 0)
+pub fn delete_memory_item(connection: &mut Connection, id: i64) -> SqlResult<bool> {
+    run_write(connection, |connection| {
+        Ok(connection.execute(
+            "DELETE FROM spaced_repetition_items WHERE id = ?1 AND user_id = ?2",
+            params![id, DEFAULT_USER_ID],
+        )? > 0)
+    })
 }
 
 pub fn review_memory_item(
-    connection: &Connection,
+    connection: &mut Connection,
     id: i64,
     grade: &str,
 ) -> SqlResult<SpacedRepetitionItem> {
-    let raw = memory_item_raw_by_id(connection, id)?;
-    let stability_after =
-        raw.stability * grade_multiplier(grade) * difficulty_scale(raw.difficulty);
-    connection.execute(
-        "UPDATE spaced_repetition_items SET stability = ?1, reps = reps + 1, last_review_date = ?2
-         WHERE id = ?3 AND user_id = ?4",
-        params![stability_after, today_iso(), id, DEFAULT_USER_ID],
-    )?;
-    connection.execute(
-        "INSERT INTO review_logs (item_id, grade, stability_before, stability_after, retrievability)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
+    let grade = grade.to_string();
+    run_write(connection, |connection| {
+        let raw = memory_item_raw_by_id(connection, id)?;
+        let stability_after =
+            raw.stability * grade_multiplier(&grade) * difficulty_scale(raw.difficulty);
+        connection.execute(
+            "UPDATE spaced_repetition_items SET stability = ?1, reps = reps + 1, last_review_date = ?2
+             WHERE id = ?3 AND user_id = ?4",
+            params![stability_after, today_iso(), id, DEFAULT_USER_ID],
+        )?;
+        insert_fsrs_review(
+            connection,
             id,
-            grade,
+            &grade,
             raw.stability,
             stability_after,
-            calculate_retrievability(raw.stability, days_since(&raw.last_review_date, &today_iso()))
-        ],
-    )?;
-    memory_item_by_id(connection, id)
+            calculate_retrievability(raw.stability, days_since(&raw.last_review_date, &today_iso())),
+        )?;
+        memory_item_by_id(connection, id)
+    })
 }
 
-pub fn list_review_logs(connection: &Connection, item_id: i64) -> SqlResult<Vec<ReviewLog>> {
+pub fn list_fsrs_reviews_for_item(connection: &Connection, item_id: i64) -> SqlResult<Vec<FsrsReview>> {
     let mut statement = connection.prepare(
         "SELECT id, item_id, grade, stability_before, stability_after, retrievability, reviewed_at
-         FROM review_logs WHERE item_id = ?1 ORDER BY reviewed_at DESC, id DESC LIMIT 50",
+         FROM fsrs_reviews WHERE item_id = ?1 ORDER BY reviewed_at DESC, id DESC LIMIT 50",
     )?;
     statement
         .query_map(params![item_id], |row| {
             let grade: String = row.get(2)?;
-            Ok(ReviewLog {
+            Ok(FsrsReview {
                 id: row.get(0)?,
                 item_id: row.get(1)?,
                 grade_label: grade_label(&grade),
@@ -2217,4 +2382,419 @@ pub fn retention_overview(connection: &Connection, horizon_days: Option<i64>) ->
         series,
         rows: rows_out,
     })
+}
+
+/* ---------------------------------------------------------------- */
+/* API de desempenho — livestream de retenção + relatório consolidado */
+/* ---------------------------------------------------------------- */
+
+const MANY_PARTIALS_THRESHOLD: i64 = 3;
+const LIVESTREAM_HORIZON_MINUTES: i64 = 90;
+const REPORT_HORIZON_DAYS: i64 = 60;
+
+/// { subject_id: (questions_total, questions_correct) } por matéria.
+fn question_stats_by_subject(connection: &Connection) -> SqlResult<HashMap<i64, (i64, i64)>> {
+    let mut statement = connection.prepare(
+        "SELECT subject_id,
+                SUM(questions_total) AS total,
+                SUM(questions_correct) AS correct
+         FROM question_results
+         WHERE user_id = ?1
+         GROUP BY subject_id",
+    )?;
+    let mut result = HashMap::new();
+    let mut query = statement.query(params![DEFAULT_USER_ID])?;
+    while let Some(row) = query.next()? {
+        let subject_id: i64 = row.get(0)?;
+        let total: i64 = row.get(1)?;
+        let correct: i64 = row.get(2)?;
+        result.insert(subject_id, (total, correct));
+    }
+    Ok(result)
+}
+
+/// { subject_id: (blocos_concluidos, blocos_parciais) } por matéria.
+fn focus_blocks_by_subject(connection: &Connection) -> SqlResult<HashMap<i64, (i64, i64)>> {
+    let mut statement = connection.prepare(
+        "SELECT subject_id,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS deep_blocks,
+                SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END) AS partial_blocks
+         FROM focus_sessions
+         WHERE user_id = ?1
+         GROUP BY subject_id",
+    )?;
+    let mut result = HashMap::new();
+    let mut query = statement.query(params![DEFAULT_USER_ID])?;
+    while let Some(row) = query.next()? {
+        let subject_id: i64 = row.get(0)?;
+        result.insert(subject_id, (row.get(1)?, row.get(2)?));
+    }
+    Ok(result)
+}
+
+fn memory_items_all(connection: &Connection) -> SqlResult<Vec<SrsRow>> {
+    let mut statement = connection.prepare(&format!(
+        "{SRS_JOIN_SELECT} WHERE si.user_id = ?1 ORDER BY si.id ASC"
+    ))?;
+    statement
+        .query_map(params![DEFAULT_USER_ID], srs_row_from_row)?
+        .collect::<SqlResult<Vec<_>>>()
+}
+
+/// Livestream de retenção — amostra em tempo real por matéria (Retenção · livestream).
+/// Acurácia vem do histórico de questões; a variação de retenção vem da projeção FSRS
+/// dos próximos 3 dias; `overdue` sinaliza itens vencidos com retenção abaixo do piso;
+/// `manyPartials` (>= 3 blocos parciais) dispara o aviso vermelho no painel.
+pub fn performance_livestream(connection: &Connection) -> SqlResult<PerformanceLiveStream> {
+    let today = today_iso();
+    let subjects = list_subjects(connection)?;
+    let items = memory_items_all(connection)?;
+    let question_by = question_stats_by_subject(connection)?;
+    let focus_by = focus_blocks_by_subject(connection)?;
+
+    let ticks = subjects
+        .iter()
+        .map(|subject| {
+            let subject_items: Vec<&SrsRow> = items
+                .iter()
+                .filter(|row| row.subject_id == Some(subject.id))
+                .collect();
+            let count = subject_items.len().max(1);
+            let retrievability_today = subject_items
+                .iter()
+                .map(|row| {
+                    calculate_retrievability(row.stability, days_since(&row.last_review_date, &today))
+                })
+                .sum::<f64>()
+                / count as f64
+                * 100.0;
+            let retrievability_ahead = subject_items
+                .iter()
+                .map(|row| {
+                    calculate_retrievability(
+                        row.stability,
+                        days_since(&row.last_review_date, &today) + 3.0,
+                    )
+                })
+                .sum::<f64>()
+                / count as f64
+                * 100.0;
+            let (total, correct) = question_by.get(&subject.id).copied().unwrap_or((0, 0));
+            let accuracy = if total > 0 { percentage(correct, total) } else { 70.0 };
+            let partials = focus_by
+                .get(&subject.id)
+                .map(|(_, partial)| *partial)
+                .unwrap_or(0);
+            let overdue = !subject_items.is_empty()
+                && subject_items
+                    .iter()
+                    .any(|row| days_since(&row.last_review_date, &today) > row.stability)
+                && retrievability_today < 70.0;
+            PerformanceLiveTick {
+                subject_id: subject.id,
+                subject_name: subject.name.clone(),
+                color: subject.color.clone(),
+                accuracy: round1(accuracy),
+                retention_delta: round1(retrievability_today - retrievability_ahead),
+                overdue,
+                many_partials: partials >= MANY_PARTIALS_THRESHOLD,
+            }
+        })
+        .collect();
+
+    Ok(PerformanceLiveStream {
+        generated_at: chrono::Local::now().format("%Y-%m-%dT%H:%M").to_string(),
+        horizon_minutes: LIVESTREAM_HORIZON_MINUTES,
+        ticks,
+    })
+}
+
+/// Relatório consolidado de desempenho — cruzamento de ranking, acurácia, retenção
+/// (FSRS) e foco (blocos profundos × parciais), com totais gerais do período.
+pub fn consolidated_performance_report(
+    connection: &Connection,
+) -> SqlResult<ConsolidatedPerformanceReport> {
+    let today = today_iso();
+    let subjects = list_subjects(connection)?;
+    let items = memory_items_all(connection)?;
+    let question_by = question_stats_by_subject(connection)?;
+    let focus_by = focus_blocks_by_subject(connection)?;
+    let ranking = priority_ranking(connection)?;
+    let rank_by: HashMap<i64, i64> = ranking
+        .iter()
+        .map(|entry| (entry.subject.id, entry.rank))
+        .collect();
+
+    let mut rows: Vec<ConsolidatedPerformanceRow> = Vec::with_capacity(subjects.len());
+    for subject in &subjects {
+        let subject_items: Vec<&SrsRow> = items
+            .iter()
+            .filter(|row| row.subject_id == Some(subject.id))
+            .collect();
+        let count = subject_items.len().max(1);
+        let retrievability_today = subject_items
+            .iter()
+            .map(|row| {
+                calculate_retrievability(row.stability, days_since(&row.last_review_date, &today))
+            })
+            .sum::<f64>()
+            / count as f64
+            * 100.0;
+        let mut earliest_due = 0_i64;
+        let mut overdue_items = 0_i64;
+        for row in &subject_items {
+            let elapsed = days_since(&row.last_review_date, &today);
+            let optimal = row.stability.round().max(1.0) as f64;
+            let due = (optimal - elapsed).ceil() as i64;
+            if earliest_due == 0 || due < earliest_due {
+                earliest_due = due;
+            }
+            if elapsed > row.stability {
+                overdue_items += 1;
+            }
+        }
+        let (total, correct) = question_by.get(&subject.id).copied().unwrap_or((0, 0));
+        let accuracy = if total > 0 { percentage(correct, total) } else { 0.0 };
+        let (deep_blocks, partials) = focus_by.get(&subject.id).copied().unwrap_or((0, 0));
+        let floor = (100.0 - subject.difficulty as f64 * 8.0).max(50.0);
+        rows.push(ConsolidatedPerformanceRow {
+            subject_id: subject.id,
+            subject_name: subject.name.clone(),
+            color: subject.color.clone(),
+            rank: rank_by.get(&subject.id).copied().unwrap_or(0),
+            accuracy: round1(accuracy),
+            questions_total: total,
+            questions_correct: correct,
+            retention_today: round1(retrievability_today.max(0.0).min(100.0)),
+            due_in_days: earliest_due,
+            overdue_items,
+            deep_work_blocks: deep_blocks,
+            partial_blocks: partials,
+            has_many_partials: partials >= MANY_PARTIALS_THRESHOLD,
+            is_overdue: overdue_items > 0 || accuracy < floor,
+        });
+    }
+    rows.sort_by(|a, b| a.rank.cmp(&b.rank));
+
+    let questions_total = rows.iter().map(|row| row.questions_total).sum::<i64>();
+    let questions_correct = rows.iter().map(|row| row.questions_correct).sum::<i64>();
+    let totals = ConsolidatedPerformanceTotals {
+        questions_total,
+        questions_correct,
+        accuracy: if questions_total > 0 {
+            percentage(questions_correct, questions_total)
+        } else {
+            0.0
+        },
+        deep_work_blocks: rows.iter().map(|row| row.deep_work_blocks).sum(),
+        partial_blocks: rows.iter().map(|row| row.partial_blocks).sum(),
+        overdue_items: rows.iter().map(|row| row.overdue_items).sum(),
+        subjects_late: rows.iter().filter(|row| row.is_overdue).count() as i64,
+    };
+
+    Ok(ConsolidatedPerformanceReport {
+        generated_at: today,
+        horizon_days: REPORT_HORIZON_DAYS,
+        ranking: rows,
+        totals,
+    })
+}
+
+/* ---------------------------------------------------------------- */
+/* Curvas de retenção FSRS                                           */
+/* ---------------------------------------------------------------- */
+
+/// Recria a estabilidade "melhor estado" de um item a partir do histórico de
+/// revisões gravado em `fsrs_reviews`. Revisões futuras (data > hoje) são
+/// ignoradas; revisões "again" não ascendem a estabilidade (voltam ao valor
+/// anterior). Sem histórico, cai de volta para a estabilidade atual do item.
+fn stability_from_reviews(connection: &Connection, item_id: i64, fallback: f64) -> SqlResult<f64> {
+    let today = today_iso();
+    let mut statement = connection.prepare(
+        "SELECT stability_before, stability_after, grade, reviewed_at
+         FROM fsrs_reviews WHERE item_id = ?1 ORDER BY reviewed_at ASC, id ASC",
+    )?;
+    let rows: Vec<(f64, f64, String, String)> = statement
+        .query_map(params![item_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<SqlResult<Vec<_>>>()?;
+    if rows.is_empty() {
+        return Ok(fallback);
+    }
+    let mut best_stability = 0.0f64;
+    for (before, after, grade, reviewed_at) in &rows {
+        if reviewed_at.as_str() > today.as_str() {
+            continue;
+        }
+        let candidate = if grade.as_str() == "again" {
+            before.max(0.0)
+        } else {
+            after.max(*before)
+        };
+        best_stability = best_stability.max(candidate);
+    }
+    if best_stability <= 0.0 {
+        return Ok(fallback);
+    }
+    Ok(best_stability)
+}
+
+/// Gera a curva física R(t) = (1 + t/(9S))⁻¹ a partir de hoje, com a linha
+/// de alerta em 90%. `crosses_at_day` = primeiro dia em que R ≤ 90% (0 = já
+/// cruzou hoje; None = não cruza dentro do horizonte).
+fn curve_from_stability(stability: f64, elapsed_today: f64, horizon: i64) -> RetentionCurve {
+    let mut points = Vec::with_capacity(horizon as usize + 1);
+    let mut crossed_at: Option<i64> = None;
+    for day in 0..=horizon {
+        let retrievability = calculate_retrievability(stability, elapsed_today + day as f64) * 100.0;
+        if crossed_at.is_none() && retrievability <= 90.0 {
+            crossed_at = Some(day);
+        }
+        points.push(RetentionCurvePoint {
+            x: day,
+            y: round1(retrievability.clamp(0.0, 100.0)),
+        });
+    }
+    RetentionCurve {
+        points,
+        crosses_at_day: crossed_at,
+    }
+}
+
+/// Curva de retenção de um item específico (backend calcula; o frontend apenas
+/// desenha). Retorna `None` se o item não existe.
+pub fn retention_curve_for_item(
+    connection: &Connection,
+    item_id: i64,
+    horizon_days: Option<i64>,
+) -> SqlResult<Option<RetentionCurve>> {
+    let raw = match memory_item_raw_by_id(connection, item_id) {
+        Ok(raw) => raw,
+        Err(_) => return Ok(None),
+    };
+    let stability = stability_from_reviews(connection, item_id, raw.stability)?;
+    let elapsed_today = days_since(&raw.last_review_date, &today_iso());
+    let horizon = horizon_days.unwrap_or(90).clamp(7, 365);
+    Ok(Some(curve_from_stability(stability, elapsed_today, horizon)))
+}
+
+/// Curva global: média diária de R(t) sobre todos os itens do usuário.
+pub fn retention_curve_global(
+    connection: &Connection,
+    horizon_days: Option<i64>,
+) -> SqlResult<RetentionCurve> {
+    let horizon = horizon_days.unwrap_or(90).clamp(7, 365);
+    let mut statement = connection.prepare(&format!(
+        "{SRS_JOIN_SELECT} WHERE si.user_id = ?1 ORDER BY si.id ASC"
+    ))?;
+    let rows: Vec<SrsRow> = statement
+        .query_map(params![DEFAULT_USER_ID], srs_row_from_row)?
+        .collect::<SqlResult<Vec<_>>>()?;
+    if rows.is_empty() {
+        return Ok(RetentionCurve {
+            points: Vec::new(),
+            crosses_at_day: None,
+        });
+    }
+    let today = today_iso();
+    let mut points = Vec::with_capacity(horizon as usize + 1);
+    let mut crossed_at: Option<i64> = None;
+    for day in 0..=horizon {
+        let mean: f64 = rows
+            .iter()
+            .map(|row| {
+                let elapsed = days_since(&row.last_review_date, &today);
+                calculate_retrievability(row.stability, elapsed + day as f64)
+            })
+            .sum::<f64>()
+            / rows.len() as f64;
+        let percent = mean * 100.0;
+        if crossed_at.is_none() && percent <= 90.0 {
+            crossed_at = Some(day);
+        }
+        points.push(RetentionCurvePoint {
+            x: day,
+            y: round1(percent.clamp(0.0, 100.0)),
+        });
+    }
+    Ok(RetentionCurve {
+        points,
+        crosses_at_day: crossed_at,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_connection() -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "foreign_keys", "ON").unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        migrate(&connection).unwrap();
+        seed(&mut connection).unwrap();
+        connection
+    }
+
+    /// PASSO 4 — atomicidade: uma gravação que falha no meio não deixa
+    /// registros parciais; toda a transação é revertida.
+    #[test]
+    fn run_write_rolls_back_partial_writes_on_failure() {
+        let mut connection = memory_connection();
+        let before: i64 = connection
+            .query_row("SELECT COUNT(*) FROM subjects", [], |row| row.get(0))
+            .unwrap();
+        assert!(before > 0, "seed deve fornecer linhas para o teste");
+
+        let result = run_write(&mut connection, |connection| {
+            // 1ª gravação: válida (mas deve ser revertida junto).
+            connection.execute(
+                "INSERT INTO focus_sessions (user_id, subject_id, planned_minutes, elapsed_minutes, started_at)
+                 VALUES (1, 1, 25, 25, '2026-09-19')",
+                [],
+            )?;
+            // 2ª gravação: viola CHECK(planned_minutes > 0) → transação aborta.
+            connection.execute(
+                "INSERT INTO focus_sessions (user_id, subject_id, planned_minutes, started_at)
+                 VALUES (1, 1, -5, '2026-09-19')",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(result.is_err(), "esperava erro por violação de CHECK");
+
+        let after: i64 = connection
+            .query_row("SELECT COUNT(*) FROM subjects", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before, after, "rollback deve restaurar o estado original");
+        let focus_rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM focus_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(focus_rows, 0, "nenhuma gravação parcial pode sobreviver");
+    }
+
+    /// A transação é confirmada apenas quando todas as gravações têm sucesso.
+    #[test]
+    fn run_write_commits_when_everything_succeeds() {
+        let mut connection = memory_connection();
+        run_write(&mut connection, |connection| {
+            connection.execute(
+                "INSERT INTO focus_sessions (user_id, subject_id, goal_type, planned_minutes, elapsed_minutes, started_at)
+                 VALUES (1, 1, 'paginas', 50, 50, '2026-09-19')",
+                [],
+            )?;
+            connection.execute(
+                "INSERT INTO focus_sessions (user_id, subject_id, goal_type, planned_minutes, elapsed_minutes, started_at)
+                 VALUES (1, 1, 'paginas', 25, 20, '2026-09-20')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let focus_rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM focus_sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(focus_rows, 2);
+    }
 }

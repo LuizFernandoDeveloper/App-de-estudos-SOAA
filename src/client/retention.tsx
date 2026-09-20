@@ -39,14 +39,14 @@ const MODES: Array<{ value: ViewMode; label: string; icon: typeof Layers }> = [
   { value: "isolated", label: "Drill-down", icon: TrendingDown }
 ];
 
-export function RetentionGraphBoard({ overview, demo }: { overview: RetentionOverview | null; demo: boolean }) {
+export function RetentionGraphBoard({ overview }: { overview: RetentionOverview | null }) {
   const [viewMode, setViewMode] = useState<ViewMode>("all");
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | null>(null);
   const [selectedTopicId, setSelectedTopicId] = useState<number | null>(null);
 
   const globalSeries = useMemo(() => overview?.series.find((s) => s.level === "global") ?? null, [overview]);
-  const subjectSeries = useMemo(() => overview?.series.filter((s) => s.level === "subject") ?? [], [overview]);
-  const topicSeries = useMemo(() => overview?.series.filter((s) => s.level === "topic") ?? [], [overview]);
+  const subjectSeries = useMemo(() => overview?.series.filter((s) => s.level === "subject" && s.items > 0) ?? [], [overview]);
+  const topicSeries = useMemo(() => overview?.series.filter((s) => s.level === "topic" && s.items > 0) ?? [], [overview]);
 
   const subjectsAvailable = useMemo(
     () => [...subjectSeries].sort((a, b) => a.retrievabilityToday - b.retrievabilityToday),
@@ -99,7 +99,7 @@ export function RetentionGraphBoard({ overview, demo }: { overview: RetentionOve
     return (
       <section className="cogn-span-full retention-board">
         <div className="panel-header"><h3><Layers size={16} /> Retenção por Matéria e Nicho</h3></div>
-        <p className="cogn-empty">Cadastre itens de memória em {demo ? "diferentes matérias e nichos" : "diferentes matérias e nichos (use o formulário do gráfico de decaimento, com o campo 'Nicho')"} para ver a degradação da memória em nível macro (matéria) e micro (nicho).</p>
+        <p className="cogn-empty">Cadastre itens de memória em diferentes matérias e nichos (use o formulário do gráfico de decaimento, com o campo 'Nicho') para ver a degradação da memória em nível macro (matéria) e micro (nicho).</p>
       </section>
     );
   }

@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="500" viewBox="0 0 760 500" font-family="Segoe UI, sans-serif">
+  <defs>
+    <linearGradient id="pg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111f31"/>
+      <stop offset="1" stop-color="#0c1828"/>
+    </linearGradient>
+    <linearGradient id="barR" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff5a71"/>
+      <stop offset="1" stop-color="#ffca76"/>
+    </linearGradient>
+    <linearGradient id="barA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffca76"/>
+      <stop offset="1" stop-color="#f0e2d0"/>
+    </linearGradient>
+    <linearGradient id="barG" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#a7f3d0"/>
+    </linearGradient>
+    <linearGradient id="hdr" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#28205e"/>
+      <stop offset="1" stop-color="#102239"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="760" height="500" fill="#08111f"/>
+  <ellipse cx="380" cy="-40" rx="420" ry="150" fill="#101d2d"/>
+
+  <!-- header -->
+  <g transform="translate(24 24)">
+    <rect width="712" height="58" rx="15" fill="url(#hdr)" stroke="#3d4690"/>
+    <circle cx="42" cy="29" r="13" fill="none" stroke="#b9b1ff" stroke-width="2"/>
+    <text x="42" y="34" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">1</text>
+    <text x="66" y="27" font-size="14" font-weight="700" fill="#eff6ff">Ranking de prioridade</text>
+    <text x="66" y="43" font-size="11" fill="#93a5bd">score = IP estratégico + déficit + ritmo + tendência</text>
+    <g transform="translate(486 16)" font-size="11">
+      <rect x="0" y="-12" width="106" height="26" rx="13" fill="#0d1b2d" stroke="#213148"/>
+      <circle cx="17" cy="-1" r="5" fill="#ff5a71"/>
+      <text x="30" y="3" fill="#dbe6f4">Z-1 · atenção</text>
+    </g>
+    <g transform="translate(600 16)" font-size="11">
+      <rect x="0" y="-12" width="104" height="26" rx="13" fill="#0d1b2d" stroke="#213148"/>
+      <circle cx="17" cy="-1" r="5" fill="#ffca76"/>
+      <text x="30" y="3" fill="#dbe6f4">Z-2 · ritmo</text>
+    </g>
+  </g>
+
+  <!-- table -->
+  <g transform="translate(24 100)">
+    <rect width="442" height="360" rx="15" fill="url(#pg)" stroke="#213148"/>
+    <text x="20" y="28" font-size="12" font-weight="700" fill="#d7e2f0">todas as matérias</text>
+    <line x1="20" y1="42" x2="422" y2="42" stroke="#16263b"/>
+
+    <g transform="translate(0 56)" font-size="11.5">
+      <rect x="-4" y="-12" width="442" height="54" fill="#5e22301a"/>
+      <rect x="-4" y="-12" width="4" height="54" fill="#ff5a71"/>
+      <rect x="20" y="-8" width="22" height="22" rx="6" fill="#5f52c7"/>
+      <text x="31" y="8" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">1</text>
+      <circle cx="58" cy="3" r="5" fill="#7f73e7"/>
+      <text x="72" y="7" fill="#eef5ff" font-weight="600">Matemática · Análise Combinatória</text>
+      <g font-size="9">
+        <rect x="248" y="-9" width="30" height="18" rx="9" fill="#7663f324" stroke="#7663f33e"/>
+        <text x="256" y="4" font-weight="800" fill="#bcb4ff">IP 20</text>
+        <rect x="286" y="-9" width="44" height="18" rx="9" fill="#5e223044" stroke="#a040525c"/>
+        <circle cx="296" cy="0" r="4" fill="#ff5a71"/>
+        <text x="305" y="4" font-weight="800" fill="#ffb9c4">Z-1</text>
+        <text x="0" y="26" fill="#8195ad">S 9d</text>
+        <text x="36" y="26" fill="#8195ad">R 54%</text>
+        <text x="72" y="26" fill="#55e6aa">▲ 2</text>
+        <rect x="104" y="16" width="130" height="6" rx="3" fill="#22334a"/>
+        <rect x="104" y="16" width="98" height="6" rx="3" fill="url(#barR)"/>
+        <text x="240" y="24" fill="#ffca76" font-weight="700">↓ 14%</text>
+      </g>
+    </g>
+
+    <g transform="translate(0 120)" font-size="11.5">
+      <rect x="-4" y="-12" width="442" height="54" fill="#563c1d1a"/>
+      <rect x="-4" y="-12" width="4" height="54" fill="#ffca76"/>
+      <rect x="20" y="-8" width="22" height="22" rx="6" fill="#4a3f78"/>
+      <text x="31" y="8" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">2</text>
+      <circle cx="58" cy="3" r="5" fill="#f472b6"/>
+      <text x="72" y="7" fill="#eef5ff" font-weight="600">Física · Termodinâmica</text>
+      <g font-size="9">
+        <rect x="248" y="-9" width="30" height="18" rx="9" fill="#7663f324" stroke="#7663f33e"/>
+        <text x="256" y="4" font-weight="800" fill="#bcb4ff">IP 25</text>
+        <rect x="286" y="-9" width="44" height="18" rx="9" fill="#563c1d3d" stroke="#86693c66"/>
+        <circle cx="296" cy="0" r="4" fill="#ffca76"/>
+        <text x="305" y="4" font-weight="800" fill="#ffe6a3">Z-2</text>
+        <text x="0" y="26" fill="#8195ad">S 7d</text>
+        <text x="36" y="26" fill="#8195ad">R 68%</text>
+        <text x="72" y="26" fill="#ffca76">▼ 1</text>
+        <rect x="104" y="16" width="130" height="6" rx="3" fill="#22334a"/>
+        <rect x="104" y="16" width="110" height="6" rx="3" fill="url(#barA)"/>
+        <text x="240" y="24" fill="#55e6aa" font-weight="700">↑ 3%</text>
+      </g>
+    </g>
+
+    <g transform="translate(0 184)" font-size="11.5">
+      <rect x="-4" y="-12" width="442" height="54" fill="#123a2d1a"/>
+      <rect x="-4" y="-12" width="4" height="54" fill="#34d399"/>
+      <rect x="20" y="-8" width="22" height="22" rx="6" fill="#1d4234"/>
+      <text x="31" y="8" text-anchor="middle" font-size="12" font-weight="800" fill="#bff0da">3</text>
+      <circle cx="58" cy="3" r="5" fill="#22d3ee"/>
+      <text x="72" y="7" fill="#eef5ff" font-weight="600">Português · Interpretação</text>
+      <g font-size="9">
+        <rect x="248" y="-9" width="30" height="18" rx="9" fill="#7663f324" stroke="#7663f33e"/>
+        <text x="256" y="4" font-weight="800" fill="#bcb4ff">IP 12</text>
+        <rect x="286" y="-9" width="44" height="18" rx="9" fill="#123a2d3d" stroke="#2f7a5d66"/>
+        <circle cx="296" cy="0" r="4" fill="#34d399"/>
+        <text x="305" y="4" font-weight="800" fill="#a7f3d0">Z-3</text>
+        <text x="0" y="26" fill="#8195ad">S 20d</text>
+        <text x="36" y="26" fill="#8195ad">R 91%</text>
+        <text x="72" y="26" fill="#55e6aa">▲ 1</text>
+        <rect x="104" y="16" width="130" height="6" rx="3" fill="#22334a"/>
+        <rect x="104" y="16" width="122" height="6" rx="3" fill="url(#barG)"/>
+        <text x="240" y="24" fill="#55e6aa" font-weight="700">↑ 9%</text>
+      </g>
+    </g>
+
+    <g transform="translate(0 254)" font-size="11">
+      <circle cx="26.5" cy="3" r="5" fill="#ffca76"/>
+      <text x="38" y="7" fill="#c4d1e0">Novo · Matemática ENEM · Estatística</text>
+      <text x="286" y="7" fill="#8195ad">recém-entrou no ranking</text>
+    </g>
+    <line x1="20" y1="278" x2="422" y2="278" stroke="#16263b"/>
+    <text x="20" y="302" font-size="11" fill="#8195ad">Movimento ≠ prioridade: composição em tempo real a cada revisão de questões.</text>
+    <text x="20" y="328" font-size="11" fill="#8195ad">▼▼ Saiba por quê no tooltip de cada linha.</text>
+  </g>
+
+  <!-- side: reinforcement -->
+  <g transform="translate(484 100)">
+    <rect width="252" height="360" rx="15" fill="url(#pg)" stroke="#213148"/>
+    <text x="18" y="28" font-size="12" font-weight="700" fill="#d7e2f0">Foco do reforço</text>
+    <text x="18" y="46" font-size="10.5" fill="#8195ad">alocação semanal por matéria</text>
+
+    <g font-size="11">
+      <rect x="18" y="64" width="216" height="46" rx="9" fill="#0d1b2d" stroke="#213148"/>
+      <circle cx="36" cy="82" r="5" fill="#7f73e7"/>
+      <text x="48" y="79" fill="#dbe6f4" font-weight="600">Matemática · Geom. Analítica</text>
+      <text x="48" y="97" fill="#8195ad">Sáb · 120 min</text>
+      <text x="206" y="96" fill="#55e6aa" font-weight="700">2h</text>
+    </g>
+    <g font-size="11">
+      <rect x="18" y="120" width="216" height="46" rx="9" fill="#0d1b2d" stroke="#213148"/>
+      <circle cx="36" cy="138" r="5" fill="#22d3ee"/>
+      <text x="48" y="135" fill="#dbe6f4" font-weight="600">Química · Orgânica</text>
+      <text x="48" y="153" fill="#8195ad">Ter · 90 min</text>
+      <text x="206" y="152" fill="#55e6aa" font-weight="700">1h30</text>
+    </g>
+    <text x="18" y="196" font-size="11" fill="#8195ad">Reforço = remanejar tempo livre para a Zona Vermelha nos dias de folga do cronograma.</text>
+
+    <rect x="18" y="222" width="216" height="1" fill="#16263b"/>
+    <text x="18" y="246" font-size="11" font-weight="700" fill="#d7e2f0">Dica de retomada</text>
+    <text x="18" y="266" font-size="10.5" fill="#a9b7ca">1. Reabra o timebox de 30 min</text>
+    <text x="18" y="283" font-size="10.5" fill="#a9b7ca">2. Resolva 5 questões da Zona</text>
+    <text x="18" y="300" font-size="10.5" fill="#a9b7ca">3. Depois revisar só o ponto de R 90%</text>
+  </g>
+</svg>

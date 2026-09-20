@@ -4,6 +4,8 @@ dist-server/
 release/
 target/
 src-tauri/target/
+coverage/
+__pycache__/
 *.db
 *.db-shm
 *.db-wal

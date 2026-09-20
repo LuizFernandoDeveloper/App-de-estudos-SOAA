@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460" font-family="Segoe UI, sans-serif">
+  <defs>
+    <radialGradient id="glowA" cx="0" cy="0" r="1">
+      <stop offset="0" stop-color="#18295b" stop-opacity="1"/>
+      <stop offset="1" stop-color="#18295b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="heroGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#28205e"/>
+      <stop offset="0.5" stop-color="#172b56"/>
+      <stop offset="1" stop-color="#102239"/>
+    </linearGradient>
+    <linearGradient id="panelGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111f31"/>
+      <stop offset="1" stop-color="#0c1828"/>
+    </linearGradient>
+    <linearGradient id="barA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7f73e7"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="barR" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff5a71"/>
+      <stop offset="1" stop-color="#ffca76"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="460" fill="#08111f"/>
+  <ellipse cx="860" cy="-40" rx="520" ry="260" fill="url(#glowA)"/>
+  <ellipse cx="220" cy="480" rx="480" ry="220" fill="#101d2d66"/>
+
+  <!-- brand -->
+  <g transform="translate(48 46)">
+    <rect width="54" height="54" rx="14" fill="url(#heroGrad)" stroke="#3d4690" stroke-width="2"/>
+    <circle cx="27" cy="27" r="14" fill="none" stroke="#b9b1ff" stroke-width="2.5"/>
+    <circle cx="27" cy="27" r="4.5" fill="#22d3ee"/>
+    <circle cx="20" cy="20" r="2" fill="#ffca76"/>
+    <circle cx="35" cy="34" r="2" fill="#ff5a71"/>
+    <circle cx="33" cy="19" r="2" fill="#34d399"/>
+    <text x="66" y="24" font-size="27" font-weight="800" fill="#eff6ff">SOAA</text>
+    <text x="66" y="45" font-size="14" fill="#93a5bd">Sistema Operacional de Autodidatismo Avançado</text>
+  </g>
+
+  <g transform="translate(48 142)">
+    <text font-size="34" font-weight="700" fill="#e6effc">Planeje. Execute. <tspan fill="#b9b1ff">Não esqueça.</tspan></text>
+    <text y="44" font-size="16" fill="#9db0c7">Seu painel de comando de estudos — semanal, ao vivo, offline e <tspan fill="#55e6aa">local-first</tspan>.</text>
+    <g font-size="12">
+      <g transform="translate(0 76)">
+        <rect x="0" y="-14" width="150" height="28" rx="14" fill="#0d1b2d" stroke="#26405f"/>
+        <circle cx="20" cy="0" r="4" fill="#34d399"/>
+        <text x="36" y="4" fill="#c4d1e0">100% offline</text>
+      </g>
+      <g transform="translate(164 76)">
+        <rect x="0" y="-14" width="170" height="28" rx="14" fill="#0d1b2d" stroke="#26405f"/>
+        <circle cx="20" cy="0" r="4" fill="#7f73e7"/>
+        <text x="36" y="4" fill="#c4d1e0">Retenção via FSRS</text>
+      </g>
+      <g transform="translate(348 76)">
+        <rect x="0" y="-14" width="178" height="28" rx="14" fill="#0d1b2d" stroke="#26405f"/>
+        <circle cx="20" cy="0" r="4" fill="#22d3ee"/>
+        <text x="36" y="4" fill="#c4d1e0">Tauri 2 · React 19 · Rust</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- panel 1: ranking -->
+  <g transform="translate(680 26)">
+    <rect width="330" height="210" rx="15" fill="url(#panelGrad)" stroke="#213148"/>
+    <text x="18" y="26" font-size="13" font-weight="700" fill="#d7e2f0">Ranking de prioridade · ao vivo</text>
+    <g font-size="11">
+      <rect x="18" y="44" width="14" height="14" rx="4" fill="#5f52c7"/>
+      <text x="19" y="54" font-size="10" font-weight="700" fill="#fff">1</text>
+      <circle cx="44" cy="51" r="4" fill="#7f73e7"/>
+      <text x="55" y="55" fill="#dbe6f4">Matemática · Geometria Analítica</text>
+      <g font-size="9">
+        <rect x="222" y="40" width="34" height="20" rx="10" fill="#5e223044" stroke="#a040525c"/>
+        <rect x="228" y="47" width="7" height="7" rx="3.5" fill="#ff5a71"/>
+        <text x="238" y="54" font-weight="800" fill="#ffb9c4">Z-1</text>
+        <rect x="262" y="40" width="52" height="20" rx="10" fill="#1d453925" stroke="#2f8f6a59"/>
+        <text x="270" y="54" font-weight="800" fill="#a7f3d0">R 64%</text>
+      </g>
+      <rect x="18" y="68" width="296" height="7" rx="3.5" fill="#22334a"/>
+      <rect x="18" y="68" width="216" height="7" rx="3.5" fill="url(#barR)"/>
+    </g>
+    <g font-size="11">
+      <rect x="18" y="88" width="14" height="14" rx="4" fill="#2b2548"/>
+      <text x="19" y="98" font-size="10" font-weight="700" fill="#c4c1e0">2</text>
+      <circle cx="44" cy="95" r="4" fill="#f472b6"/>
+      <text x="55" y="99" fill="#dbe6f4">Física · Eletromagnetismo</text>
+      <g font-size="9">
+        <rect x="222" y="84" width="34" height="20" rx="10" fill="#563c1d3d" stroke="#86693c66"/>
+        <rect x="228" y="91" width="7" height="7" rx="3.5" fill="#ffca76"/>
+        <text x="238" y="98" font-weight="800" fill="#ffe6a3">Z-2</text>
+        <rect x="262" y="84" width="52" height="20" rx="10" fill="#563c1d3d" stroke="#86693c66"/>
+        <text x="270" y="98" font-weight="800" fill="#ffe6a3">R 58%</text>
+      </g>
+      <rect x="18" y="112" width="296" height="7" rx="3.5" fill="#22334a"/>
+      <rect x="18" y="112" width="168" height="7" rx="3.5" fill="url(#barA)"/>
+    </g>
+    <g font-size="11">
+      <rect x="18" y="132" width="14" height="14" rx="4" fill="#1d4234"/>
+      <text x="19" y="142" font-size="10" font-weight="700" fill="#bff0da">3</text>
+      <circle cx="44" cy="139" r="4" fill="#34d399"/>
+      <text x="55" y="143" fill="#dbe6f4">Química · Estequiometria</text>
+      <g font-size="9">
+        <rect x="222" y="128" width="34" height="20" rx="10" fill="#123a2d3d" stroke="#2f7a5d66"/>
+        <rect x="228" y="135" width="7" height="7" rx="3.5" fill="#34d399"/>
+        <text x="238" y="142" font-weight="800" fill="#a7f3d0">Z-3</text>
+        <rect x="262" y="128" width="52" height="20" rx="10" fill="#123a2d3d" stroke="#2f7a5d66"/>
+        <text x="270" y="142" font-weight="800" fill="#a7f3d0">R 81%</text>
+      </g>
+      <rect x="18" y="156" width="296" height="7" rx="3.5" fill="#22334a"/>
+      <rect x="18" y="156" width="256" height="7" rx="3.5" fill="#55e6aa"/>
+    </g>
+    <rect x="18" y="176" width="294" height="3" rx="1.5" fill="#16263b"/>
+    <text x="18" y="198" font-size="10" fill="#8195ad">Zona Vermelha = merece atenção hoje</text>
+  </g>
+
+  <!-- panel 2: retention curve -->
+  <g transform="translate(1030 26)">
+    <rect width="150" height="120" rx="15" fill="url(#panelGrad)" stroke="#213148"/>
+    <text x="14" y="24" font-size="11" font-weight="700" fill="#d7e2f0">Retenção · R 92%</text>
+    <path d="M14 96 C 34 96 38 88 54 88 C 70 88 74 64 92 60 C 108 56 112 42 136 40" fill="none" stroke="#7f73e7" stroke-width="2.5"/>
+    <line x1="14" y1="52" x2="136" y2="52" stroke="#ff5a71" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.85"/>
+    <path d="M14 96 C 34 96 38 90 54 88 C 70 86 76 40 92 38 C 108 36 116 26 136 24" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="5 4" opacity="0.9"/>
+    <text x="14" y="112" font-size="9" fill="#a9b7ca">Alerta 90% · ponto ótimo de revisão</text>
+  </g>
+
+  <!-- panel 3: wizard rota -->
+  <g transform="translate(680 252)">
+    <rect width="500" height="184" rx="15" fill="url(#panelGrad)" stroke="#213148"/>
+    <text x="18" y="26" font-size="13" font-weight="700" fill="#d7e2f0">Rota de prova · vestibular</text>
+    <g font-size="11">
+      <text x="18" y="52" fill="#9db0c7">Vestibular alvo</text>
+      <g transform="translate(0 60)">
+        <rect x="0" y="-13" width="54" height="26" rx="13" fill="#24405e73" stroke="#3b5b82"/>
+        <text x="10" y="5" font-weight="700" fill="#dbe6f4">ITA</text>
+        <rect x="62" y="-13" width="58" height="26" rx="13" fill="#0d1b2d" stroke="#213148"/>
+        <text x="76" y="5" font-weight="700" fill="#96a9c0">IME</text>
+        <rect x="128" y="-13" width="66" height="26" rx="13" fill="#0d1b2d" stroke="#213148"/>
+        <text x="143" y="5" font-weight="700" fill="#96a9c0">ENEM</text>
+        <rect x="202" y="-13" width="98" height="26" rx="13" fill="#0d1b2d" stroke="#213148"/>
+        <text x="216" y="5" font-weight="700" fill="#96a9c0">Ensino Médio</text>
+      </g>
+      <rect x="18" y="98" width="16" height="16" rx="4" fill="#7663f324" stroke="#7663f33e"/>
+      <path d="M21 106 L24 109 L31 101" stroke="#b9b1ff" stroke-width="2" fill="none"/>
+      <text x="42" y="110" fill="#dbe6f4">Matemática · Geometria Analítica</text>
+      <text x="222" y="110" fill="#96a9c0">peso</text>
+      <rect x="252" y="96" width="42" height="20" rx="7" fill="#0b1624" stroke="#2b3d54"/>
+      <text x="266" y="110" font-weight="700" fill="#e6f0ff">5</text>
+      <rect x="310" y="94" width="16" height="24" rx="4" fill="#7663f324" stroke="#7663f33e"/>
+      <path d="M316 101 L319 112 M319 101 L316 112" stroke="#b9b1ff" stroke-width="1.6"/>
+      <rect x="334" y="94" width="16" height="24" rx="4" fill="#0d1b2d" stroke="#213148"/>
+      <text x="336" y="110" font-weight="700" fill="#96a9c0">3</text>
+      <rect x="340" y="128" width="142" height="32" rx="10" fill="#5f52c7"/>
+      <text x="360" y="148" font-weight="700" fill="#fff">Inserir selecionadas (2)</text>
+      <text x="18" y="156" font-size="10" fill="#8195ad">Peso padrão da prova · customizável 1–5</text>
+    </g>
+  </g>
+</svg>

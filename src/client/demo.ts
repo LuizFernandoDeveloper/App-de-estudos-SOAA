@@ -1,534 +1,298 @@
-import type { BrainDumpLog, BufferAllocation, DashboardData, DayAllocation, FocusOverloadPoint, MaterialStrategy, MemoryDecayProjection, MemoryPoint, PerformanceGranularity, PerformancePoint, PlanResponse, PomodoroSession, ReschedulePlan, RetentionOverview, RetentionSeriesInfo, ReviewGrade, ScheduleResponse, SpacedRepetitionItem, StudyMaterial, Subject, SubjectAccuracyPoint, SubjectRanking, TimeboxSuggestion, Topic } from "../shared/types";
+import type {
+  BrainDumpLog,
+  BufferAllocation,
+  DashboardData,
+  DayAllocation,
+  FocusOverloadPoint,
+  FocusSession,
+  MaterialStrategy,
+  MemoryDecayProjection,
+  PerformanceGranularity,
+  PerformancePoint,
+  PlanDay,
+  PlanFocus,
+  PlanResponse,
+  Profile,
+  ReschedulePlan,
+  RetentionLiveStream,
+  RetentionLiveTick,
+  RetentionOverview,
+  ScheduleResponse,
+  SpacedRepetitionItem,
+  StudyMaterial,
+  Subject,
+  SubjectAccuracyPoint,
+  SubjectRanking,
+  TimeboxSuggestion,
+  Topic
+} from "../shared/types";
+import { buildRetentionOverview } from "./retentionData";
+import { catalogToSubjects } from "./catalog";
+
+/* Feito para pré-visualização: dados fictícios determinísticos, sempre
+   relativos a hoje. Nenhuma chamada ao backend é feita no modo demo. */
 
 const pad = (value: number) => String(value).padStart(2, "0");
-const isoDate = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-
-const daysAgo = (days: number) => {
+const fmt = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+export const addDaysIso = (days: number) => {
   const date = new Date();
-  date.setDate(date.getDate() - days);
-  return isoDate(date);
+  date.setDate(date.getDate() + days);
+  return fmt(date);
 };
+export const todayIso = () => addDaysIso(0);
 
 const formatMinutes = (value: number) => {
   const h = Math.floor(value / 60);
-  const m = value % 60;
+  const m = Math.round(value % 60);
   if (!h) return `${m}m`;
   return m ? `${h}h ${m}m` : `${h}h`;
 };
 
-export const demoSubjects: Subject[] = [
-  { id: -1, userId: 1, name: "Matemática · ITA/IME", weight: 5, difficulty: 5, computedIp: 25, color: "indigo", goalAccuracy: 75, goalCoverage: 100, currentLevel: 2, targetLevel: 5, createdAt: "" },
-  { id: -2, userId: 1, name: "Física · Mecânica e Eletromagnetismo", weight: 5, difficulty: 4, computedIp: 20, color: "violet", goalAccuracy: 75, goalCoverage: 100, currentLevel: 2, targetLevel: 4, createdAt: "" },
-  { id: -3, userId: 1, name: "Química · Físico-Química", weight: 4, difficulty: 4, computedIp: 16, color: "cyan", goalAccuracy: 70, goalCoverage: 90, currentLevel: 1, targetLevel: 4, createdAt: "" },
-  { id: -4, userId: 1, name: "Português e Redação", weight: 4, difficulty: 3, computedIp: 12, color: "pink", goalAccuracy: 80, goalCoverage: 100, currentLevel: 2, targetLevel: 3, createdAt: "" },
-  { id: -5, userId: 1, name: "Inglês · Reading", weight: 3, difficulty: 2, computedIp: 6, color: "amber", goalAccuracy: 85, goalCoverage: 80, currentLevel: 2, targetLevel: 4, createdAt: "" },
-  { id: -6, userId: 1, name: "Biologia", weight: 3, difficulty: 3, computedIp: 9, color: "emerald", goalAccuracy: 70, goalCoverage: 100, currentLevel: 1, targetLevel: 4, createdAt: "" },
-  { id: -7, userId: 1, name: "Humanas · ENEM", weight: 2, difficulty: 3, computedIp: 6, color: "orange", goalAccuracy: 65, goalCoverage: 100, currentLevel: 2, targetLevel: 3, createdAt: "" }
+/* ---------------------------------------------------------------- */
+/* Matérias, tópicos e materiais                                     */
+/* ---------------------------------------------------------------- */
+
+export const demoSubjects: Subject[] = catalogToSubjects();
+
+const demoColorFor = (subjectId: number) => demoSubjects.find((subject) => subject.id === subjectId)?.color ?? "indigo";
+
+export const demoTopicList: Topic[] = [
+  { id: 11, userId: 1, subjectId: 11, name: "Geometria plana · triângulos", status: "concluido", createdAt: addDaysIso(-90) },
+  { id: 12, userId: 1, subjectId: 11, name: "Círculos e ângulos", status: "em_andamento", createdAt: addDaysIso(-40) },
+  { id: 13, userId: 1, subjectId: 11, name: "Geometria espacial", status: "pendente", createdAt: addDaysIso(-10) },
+  { id: 21, userId: 1, subjectId: 17, name: "Cinemática", status: "concluido", createdAt: addDaysIso(-80) },
+  { id: 22, userId: 1, subjectId: 17, name: "Leis de Newton", status: "em_andamento", createdAt: addDaysIso(-30) },
+  { id: 23, userId: 1, subjectId: 17, name: "Trabalho e energia", status: "pendente", createdAt: addDaysIso(-6) },
+  { id: 31, userId: 1, subjectId: 38, name: "Cadeias carbônicas", status: "em_andamento", createdAt: addDaysIso(-25) },
+  { id: 32, userId: 1, subjectId: 38, name: "Funções orgânicas", status: "pendente", createdAt: addDaysIso(-5) },
+  { id: 41, userId: 1, subjectId: 69, name: "Concordância verbal", status: "em_andamento", createdAt: addDaysIso(-20) },
+  { id: 51, userId: 1, subjectId: 76, name: "Phrasal verbs", status: "concluido", createdAt: addDaysIso(-60) },
+  { id: 61, userId: 1, subjectId: 98, name: "Complexidade de algoritmos", status: "em_andamento", createdAt: addDaysIso(-12) }
 ];
 
-const topicSeed: Array<[number, string, "pendente" | "em_andamento" | "concluido"]> = [
-  [-1, "Números complexos", "concluido"], [-1, "Geometria analítica", "em_andamento"], [-1, "Funções trigonométricas", "pendente"],
-  [-2, "Cinemática", "concluido"], [-2, "Eletrostática", "em_andamento"], [-2, "Termodinâmica", "pendente"],
-  [-3, "Estequiometria", "concluido"], [-3, "Termoquímica", "em_andamento"],
-  [-4, "Interpretação de texto", "em_andamento"], [-4, "Dissertação", "pendente"],
-  [-5, "Vocabulary", "em_andamento"], [-5, "Skimming & scanning", "pendente"],
-  [-6, "Citologia", "pendente"], [-6, "Genética", "pendente"],
-  [-7, "Atualidades", "em_andamento"]
+export const demoMaterialList: StudyMaterial[] = [
+  { id: 101, userId: 1, subjectId: 11, topicId: 12, title: "Fundamentos da Matemática Elementar · Vol. 9", category: "Livro", urlPath: null, status: "em_andamento" as const, tags: ["geometria", "ita"], front: null, topic: null, pageFocus: null, currentPage: 214, totalPages: 380, remindDate: null, studyStrategy: null, createdAt: addDaysIso(-70) },
+  { id: 102, userId: 1, subjectId: 17, topicId: 22, title: "Tópicos de Física · Vol. 1", category: "Livro", urlPath: null, status: "em_andamento" as const, tags: ["mecânica", "ita"], front: null, topic: null, pageFocus: null, currentPage: 180, totalPages: 460, remindDate: null, studyStrategy: null, createdAt: addDaysIso(-60) },
+  { id: 103, userId: 1, subjectId: 38, topicId: 31, title: "Química Orgânica · Usberco", category: "Livro", urlPath: null, status: "em_andamento" as const, tags: ["orgânica"], front: null, topic: null, pageFocus: null, currentPage: 96, totalPages: 520, remindDate: null, studyStrategy: null, createdAt: addDaysIso(-35) },
+  { id: 104, userId: 1, subjectId: 69, topicId: 41, title: "Gramática da Língua Portuguesa", category: "Livro", urlPath: null, status: "concluido" as const, tags: ["gramática"], front: null, topic: null, pageFocus: null, currentPage: 320, totalPages: 320, remindDate: null, studyStrategy: null, createdAt: addDaysIso(-75) },
+  { id: 105, userId: 1, subjectId: 76, topicId: null, title: "English in Use · Intermediate", category: "Curso", urlPath: null, status: "em_andamento" as const, tags: ["vocabulário"], front: null, topic: null, pageFocus: null, currentPage: 0, totalPages: 0, remindDate: null, studyStrategy: null, createdAt: addDaysIso(-50) },
+  { id: 106, userId: 1, subjectId: 98, topicId: 61, title: "The Algorithm Design Manual", category: "PDF / Apostila", urlPath: null, status: "pendente" as const, tags: ["algoritmos"], front: null, topic: null, pageFocus: null, currentPage: 40, totalPages: 730, remindDate: null, studyStrategy: null, createdAt: addDaysIso(-8) },
+  { id: 107, userId: 1, subjectId: 11, topicId: 13, title: "250 Questões de Geometria Espacial", category: "Lista de exercícios", urlPath: null, status: "pendente" as const, tags: ["questões", "ita"], front: null, topic: null, pageFocus: null, currentPage: 0, totalPages: 250, remindDate: null, studyStrategy: null, createdAt: addDaysIso(-3) }
 ];
 
-export const demoTopicList: Topic[] = topicSeed.map(([subjectId, name, status], index) => ({
-  id: -(index + 1), userId: 1, subjectId: subjectId as number, name, status, createdAt: ""
-}));
+/* ---------------------------------------------------------------- */
+/* Cronograma semanal (matriz + planejamento)                        */
+/* ---------------------------------------------------------------- */
 
-const demoMaterialSeed: Array<[number, number, string, number, number, "em_andamento" | "concluido", string]> = [
-  [-1, -2, "Fundamentos da Matemática Elementar", 4, 640, "em_andamento", "edusp"],
-  [-1, -1, "Tópicos de Álgebra (Elementar I)", 2, 340, "em_andamento", "vestseller"],
-  [-2, -5, "Eletromagnetismo I", 3, 420, "em_andamento", "hermes"],
-  [-2, -4, "Apostila de Cinemática ITA", 1, 120, "em_andamento", "pdf"],
-  [-3, -7, "Química para Vestibulandos", 5, 480, "em_andamento", "atahualpa"],
-  [-4, -10, "Gramática de Uso da Língua Portuguesa", 1, 320, "concluido", "portfolio"]
-];
-
-export const demoMaterialList: StudyMaterial[] = demoMaterialSeed.map(([subjectId, topicId, title, currentPage, totalPages, status, category], index) => ({
-  id: -(index + 1),
-  userId: 1,
-  subjectId: subjectId as number,
-  topicId: topicId as number,
-  title,
-  category,
-  urlPath: null,
-  status,
-  tags: [] as string[],
-  front: null,
-  topic: null,
-  pageFocus: null,
-  currentPage,
-  totalPages,
-  remindDate: null,
-  studyStrategy: index === 0 ? "Prática de Recuperação prioritária" : index === 2 ? "Resolução em Deep Work" : null,
-  createdAt: ""
-}));
-
-const round1 = (value: number) => Math.round(value * 10) / 10;
-
-const ip = demoSubjects.map((subject) => subject.computedIp);
-const totalIp = ip.reduce((sum, value) => sum + value, 0);
-const totalMinutes = 360;
-const exactMinutes = ip.map((value) => value / totalIp * totalMinutes);
-const allocatedMinutes = [95, 75, 60, 45, 25, 35, 25];
-const percentages = ip.map((value) => Math.round(value / totalIp * 1000) / 10);
-
-export const demoSchedule: ScheduleResponse = {
-  totalHours: 6,
-  totalMinutes,
-  totalIp,
-  projectBufferMinutes: 0,
-  formattedProjectBuffer: "0m",
-  allocations: demoSubjects.map((subject, index) => ({
-    ...subject,
-    exactMinutes: exactMinutes[index],
-    allocatedMinutes: allocatedMinutes[index],
-    formattedTime: formatMinutes(allocatedMinutes[index]),
-    percentage: percentages[index]
-  }))
-};
-
-const accuracySeries = [58, 64, 71, 63, 76, 68, 72, 60, 79, 74, 70, 81, 73, 78];
-const totalsSeries = [24, 30, 28, 22, 35, 32, 26, 30, 38, 34, 30, 42, 36, 40];
-
-const performanceBySubject = [
-  { subjectId: -1, subjectName: "Matemática · ITA/IME", color: "indigo", questionsTotal: 300, questionsCorrect: 198, studiedMinutes: 420 },
-  { subjectId: -2, subjectName: "Física · Mecânica e Eletromagnetismo", color: "violet", questionsTotal: 240, questionsCorrect: 174, studiedMinutes: 350 },
-  { subjectId: -3, subjectName: "Química · Físico-Química", color: "cyan", questionsTotal: 150, questionsCorrect: 111, studiedMinutes: 280 },
-  { subjectId: -4, subjectName: "Português e Redação", color: "pink", questionsTotal: 200, questionsCorrect: 152, studiedMinutes: 300 },
-  { subjectId: -5, subjectName: "Inglês · Reading", color: "amber", questionsTotal: 90, questionsCorrect: 76, studiedMinutes: 120 },
-  { subjectId: -6, subjectName: "Biologia", color: "emerald", questionsTotal: 80, questionsCorrect: 57, studiedMinutes: 150 },
-  { subjectId: -7, subjectName: "Humanas · ENEM", color: "orange", questionsTotal: 60, questionsCorrect: 39, studiedMinutes: 100 }
-];
-
-export const demoRanking: SubjectRanking[] = (() => {
-  const maxQuestions = Math.max(...performanceBySubject.map((row) => row.questionsTotal));
-  const byId = new Map(performanceBySubject.map((row) => [row.subjectId, row]));
-  const movements = ["same", "up", "down", "same", "up", "new", "down"] as const;
-  const rows = demoSubjects.map((subject, index) => {
-    const row = byId.get(subject.id);
-    const accuracy = row ? row.questionsCorrect / row.questionsTotal * 100 : 0;
-    const strategy = subject.weight / 5 * 3;
-    const deficit = Math.min(1, Math.max(0, (subject.goalAccuracy - accuracy) / 100)) * 4;
-    const volume = row ? row.questionsTotal / maxQuestions * 1.5 : 0;
-    const priority = strategy + deficit + volume + 0.75;
-    return {
-      ...subject,
-      movement: movements[index],
-      strategyScore: round1(strategy),
-      deficitScore: round1(deficit),
-      volumeScore: round1(volume),
-      trendScore: 0.8,
-      priorityScore: round1(priority),
-      accuracy: round1(accuracy),
-      recentAccuracy: round1(accuracy * 1.02),
-      previousAccuracy: round1(accuracy * 0.96),
-      questionsTotal: row?.questionsTotal ?? 0,
-      studiedMinutes: row?.studiedMinutes ?? 0
-    };
+export const demoSchedule: ScheduleResponse = (() => {
+  const weeklyMinutes = 2160;
+  const totalMinutes = weeklyMinutes;
+  const totalIp = demoSubjects.reduce((sum, subject) => sum + subject.computedIp, 0);
+  const exactMinutes = demoSubjects.map((subject) => (subject.computedIp / totalIp) * totalMinutes);
+  const rounded = exactMinutes.map((value) => Math.max(5, Math.round(value / 5) * 5));
+  let allocatedTotal = rounded.reduce((sum, value) => sum + value, 0);
+  const capped = rounded.map((value) => {
+    if (allocatedTotal <= totalMinutes) return value;
+    const reduction = Math.min(value - 5, allocatedTotal - totalMinutes);
+    allocatedTotal -= reduction;
+    return value - reduction;
   });
-  return rows
-    .sort((a, b) => b.priorityScore - a.priorityScore)
-    .map((row, index) => ({ ...row, rank: index + 1 }));
-})();
-
-const subjectTrendSeed: Array<[number, number, number]> = [
-  [-1, 51, 2.2], [-2, 47, 1.9], [-3, 55, 1.6], [-4, 63, 1.1], [-5, 73, 0.7], [-6, 49, 1.8], [-7, 61, 0.5]
-];
-
-export const demoSubjectAccuracyTrend: SubjectAccuracyPoint[] = (() => {
-  const weeks = 10;
-  const out: SubjectAccuracyPoint[] = [];
-  for (let week = weeks; week >= 1; week--) {
-    const date = new Date();
-    date.setDate(date.getDate() - week * 7);
-    for (const [subjectId, base, slope] of subjectTrendSeed) {
-      const subject = demoSubjects.find((s) => s.id === subjectId);
-      if (!subject) continue;
-      const progress = weeks - week;
-      const noise = ((subjectId * 7 + week * 13) % 11) - 5;
-      out.push({
-        subjectId,
-        subjectName: subject.name,
-        color: subject.color,
-        date: isoDate(date),
-        questionsTotal: 12 + ((subjectId * 3 + week) % 16),
-        accuracy: Math.round(Math.min(96, Math.max(28, base + slope * progress + noise)) * 10) / 10
-      });
-    }
-  }
-  return out;
+  const allocations = demoSubjects.map((subject, index) => ({
+    ...subject,
+    exactMinutes: Math.round(exactMinutes[index] * 10) / 10,
+    allocatedMinutes: capped[index],
+    formattedTime: formatMinutes(capped[index]),
+    percentage: Math.round(subject.computedIp / totalIp * 1000) / 10
+  }));
+  return {
+    totalHours: totalMinutes / 60,
+    totalMinutes,
+    totalIp,
+    projectBufferMinutes: totalMinutes - allocatedTotal,
+    formattedProjectBuffer: formatMinutes(totalMinutes - allocatedTotal),
+    allocations
+  };
 })();
 
 export const demoDayAllocations: DayAllocation[] = [
-  { id: -1, subjectId: -1, subjectName: "Matemática · ITA/IME", color: "indigo", weekday: 1, minutes: 80, note: "Queda no ranking" },
-  { id: -2, subjectId: -2, subjectName: "Física · Mecânica e Eletromagnetismo", color: "violet", weekday: 3, minutes: 60, note: "Déficit vs meta de acerto" },
-  { id: -3, subjectId: -7, subjectName: "Humanas · ENEM", color: "orange", weekday: 5, minutes: 45, note: "Sem histórico recente" }
+  { id: 901, subjectId: 11, subjectName: demoSubjects.find((s) => s.id === 11)?.name ?? "Matemática", color: demoColorFor(11), weekday: 5, minutes: 120, note: "Dia calmo para resolver questões de dinâmica" },
+  { id: 902, subjectId: 17, subjectName: demoSubjects.find((s) => s.id === 17)?.name ?? "Física", color: demoColorFor(17), weekday: 3, minutes: 90, note: "Revisão de círculos e ângulos" },
+  { id: 903, subjectId: 76, subjectName: demoSubjects.find((s) => s.id === 76)?.name ?? "Inglês", color: demoColorFor(76), weekday: 0, minutes: 60, note: "Manutenção leve de vocabulário" }
 ];
+
+/* ---------------------------------------------------------------- */
+/* Dashboard                                                         */
+/* ---------------------------------------------------------------- */
+
+const dailyAccuracy = [50, 54, 52, 58, 61, 60, 65, 68, 66, 71, 74, 73, 79, 85];
 
 export const demoDashboard: DashboardData = {
-  profile: { dailyHours: 6, weeklyDays: 6, examTrack: "ITA", startDate: daysAgo(45), examDate: daysAgo(-120) },
+  profile: { dailyHours: Number((demoSchedule.totalMinutes / 60 / 6).toFixed(1)), weeklyDays: 6, examTrack: "ITA", startDate: addDaysIso(-120), examDate: addDaysIso(92), studyDays: [0, 1, 2, 3, 4, 5] },
   subjectsCount: demoSubjects.length,
-  materials: { total: 14, completed: 6 },
-  questions: {
-    total: 1120,
-    correct: 807,
-    accuracy: 72.1
-  },
-  weeklyStudyMinutes: 1250,
-  dailyPerformance: accuracySeries.map((accuracy, index) => ({
-    date: daysAgo(accuracySeries.length - 1 - index),
+  materials: { total: demoMaterialList.length, completed: 1 },
+  questions: { total: 1480, correct: 1049, accuracy: 71 },
+  weeklyStudyMinutes: 2160,
+  dailyPerformance: dailyAccuracy.map((accuracy, index) => ({
+    date: addDaysIso(-(dailyAccuracy.length - 1 - index)),
     accuracy,
-    total: totalsSeries[index]
+    total: 18 + (index % 5) * 6
   })),
-  subjectPerformance: performanceBySubject.map((item) => ({
-    ...item,
-    accuracy: Math.round(item.questionsCorrect / item.questionsTotal * 1000) / 10
-  })),
-  reminders: [
-    { id: -1, subjectId: -1, subjectName: "Matemática · ITA/IME", title: "Fundamentos da Matemática", front: "Aritmética", topic: "Porcentagem", pageFocus: "p. 91–140", remindDate: daysAgo(0), daysLeft: 0 },
-    { id: -2, subjectId: -2, subjectName: "Física · Mecânica e Eletromagnetismo", title: "Eletromagnetismo I", front: "Eletrostática", topic: "Campo elétrico", pageFocus: "p. 45–92", remindDate: daysAgo(-1), daysLeft: 1 }
-  ]
+  subjectPerformance: demoSubjects.map((subject, index) => {
+    const accuracy = Math.max(45, Math.min(96, subject.goalAccuracy - (index % 7) * 3));
+    return {
+      subjectId: subject.id,
+      subjectName: subject.name,
+      color: subject.color,
+      questionsTotal: 40 + ((index * 37) % 360),
+      questionsCorrect: Math.round((40 + ((index * 37) % 360)) * accuracy / 100),
+      accuracy,
+      studiedMinutes: 60 + ((index * 53) % 300)
+    };
+  }),
+  reminders: []
 };
 
-const buildTrend = (count: number, mode: PerformanceGranularity): PerformancePoint[] => {
-  const points: PerformancePoint[] = [];
-  const now = new Date();
-  for (let index = 0; index < count; index++) {
-    const offset = count - 1 - index;
-    const date = new Date(now);
-    if (mode === "day") date.setDate(date.getDate() - offset);
-    else if (mode === "week") date.setDate(date.getDate() - offset * 7);
-    else if (mode === "month") date.setMonth(date.getMonth() - offset);
-    else date.setFullYear(date.getFullYear() - offset);
+/* ---------------------------------------------------------------- */
+/* Ranking                                                           */
+/* ---------------------------------------------------------------- */
 
-    const progress = index / (count - 1);
-    const accuracy = Math.round((42 + progress * 42 + ((index * 53) % 9) - 4) * 10) / 10;
-    const total = 18 + ((index * 7) % 24);
-    const label = mode === "month"
-      ? `${pad(date.getMonth() + 1)}/${date.getFullYear()}`
-      : mode === "year"
-        ? String(date.getFullYear())
-        : `${pad(date.getDate())}/${pad(date.getMonth() + 1)}`;
-    points.push({
-      label,
-      startDate: isoDate(date),
-      questionsTotal: total,
-      questionsCorrect: Math.round(total * accuracy / 100),
-      accuracy
-    });
-  }
-  return points;
-};
+export const demoRanking: SubjectRanking[] = (() => {
+  const movements: SubjectRanking["movement"][]= ["up", "down", "same", "new"];
+  return demoSubjects
+    .map((subject, index) => {
+      const strategyScore = Math.round((0.7 + ((index * 13) % 30) / 10) * 10) / 10;
+      const deficitScore = Math.round((0.5 + ((index * 7) % 35) / 10) * 10) / 10;
+      const volumeScore = Math.round((0.4 + ((index * 11) % 25) / 10) * 10) / 10;
+      const trendScore = Math.round((0.3 + ((index * 5) % 20) / 10) * 10) / 10;
+      const priorityScore = Math.round((strategyScore + deficitScore + volumeScore + trendScore + Math.min(1.5, subject.difficulty / 5)) * 10) / 10;
+      const accuracy = Math.max(45, Math.min(96, subject.goalAccuracy - (index % 6) * 3));
+      const questionsTotal = 40 + ((index * 37) % 360);
+      return {
+        ...subject,
+        rank: 0,
+        movement: movements[index % movements.length],
+        strategyScore,
+        deficitScore,
+        volumeScore,
+        trendScore,
+        priorityScore,
+        accuracy,
+        recentAccuracy: Math.max(40, Math.min(98, accuracy + ((index % 4) - 1) * 2)),
+        previousAccuracy: Math.max(40, Math.min(98, accuracy - ((index % 3)) * 3)),
+        questionsTotal,
+        studiedMinutes: 60 + ((index * 53) % 300)
+      };
+    })
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+})();
 
-export const demoTrend: Record<PerformanceGranularity, PerformancePoint[]> = {
-  day: buildTrend(30, "day"),
-  week: buildTrend(12, "week"),
-  month: buildTrend(12, "month"),
-  year: buildTrend(6, "year")
-};
+/* ---------------------------------------------------------------- */
+/* Tendências de desempenho e sobrecarga de foco                     */
+/* ---------------------------------------------------------------- */
 
-const trendCount: Record<PerformanceGranularity, number> = { day: 30, week: 12, month: 12, year: 6 };
-
-const buildFilteredTrend = (mode: PerformanceGranularity, seed: number, base: number, slope: number, totalBias: number): PerformancePoint[] => {
-  const points: PerformancePoint[] = [];
-  const count = trendCount[mode];
-  const now = new Date();
-  for (let index = 0; index < count; index++) {
-    const offset = count - 1 - index;
-    const date = new Date(now);
-    if (mode === "day") date.setDate(date.getDate() - offset);
-    else if (mode === "week") date.setDate(date.getDate() - offset * 7);
-    else if (mode === "month") date.setMonth(date.getMonth() - offset);
-    else date.setFullYear(date.getFullYear() - offset);
-
-    const progress = index / (count - 1);
-    const wobble = ((index * 17 + seed * 31) % 11) - 5;
-    const accuracy = Math.round((base + progress * slope + wobble) * 10) / 10;
-    const total = Math.max(4, Math.round(totalBias + ((index * 5 + seed * 3) % 14)));
-    const label = mode === "month"
-      ? `${pad(date.getMonth() + 1)}/${date.getFullYear()}` : mode === "year"
-        ? String(date.getFullYear()) : `${pad(date.getDate())}/${pad(date.getMonth() + 1)}`;
-    points.push({
-      label,
-      startDate: isoDate(date),
-      questionsTotal: Math.round(total),
-      questionsCorrect: Math.max(0, Math.round(total * accuracy / 100)),
-      accuracy
-    });
-  }
-  return points;
-};
-
-/** Série de melhoria filtrada: subjectId nulo → média geral (demoTrend); topicId nulo → matéria. */
-export function demoFilteredTrend(granularity: PerformanceGranularity, subjectId: number | null, topicId: number | null): PerformancePoint[] {
-  if (subjectId === null) return demoTrend[granularity];
-  const subject = demoSubjects.find((s) => s.id === subjectId);
-  if (!subject) return demoTrend[granularity];
-  const index = demoSubjects.indexOf(subject);
-  if (topicId === null) {
-    const base = 38 + (index % 4) * 8;
-    const slope = 30 + (index % 3) * 8;
-    return buildFilteredTrend(granularity, index + 1, base, slope, 18 + index * 3);
-  }
-  const topic = demoTopicList.find((t) => t.id === topicId);
-  const topicIndex = demoTopicList.indexOf(topic ?? demoTopicList[0]);
-  const base = 30 + (topicIndex % 5) * 6;
-  const slope = 42 + (topicIndex % 3) * 6;
-  return buildFilteredTrend(granularity, topicIndex + 11, base, slope, 8 + (topicIndex % 4) * 4);
+export function demoFilteredTrend(granularity: PerformanceGranularity, subjectId: number | null = null, _topicId: number | null = null): PerformancePoint[] {
+  const offset = subjectId !== null ? (subjectId % 4) * 3 : 0;
+  const series: Record<PerformanceGranularity, Array<{ label: string; accuracy: number; volume: number }>> = {
+    day: dailyAccuracy.map((accuracy, index) => ({ label: addDaysIso(-(dailyAccuracy.length - 1 - index)).slice(5), accuracy: Math.min(96, accuracy + offset), volume: 18 + (index % 5) * 6 })),
+    week: [54, 58, 60, 63, 65, 68, 71, 76].map((accuracy, index) => ({ label: String(index + 1), accuracy: Math.min(96, accuracy + offset), volume: 90 + index * 14 })),
+    month: [55, 58, 61, 65, 68, 73].map((accuracy, index) => ({ label: String(index + 1), accuracy: Math.min(96, accuracy + offset), volume: 240 + index * 30 })),
+    year: [61, 76].map((accuracy, index) => ({ label: String(index + 1), accuracy: Math.min(96, accuracy + offset), volume: 700 + index * 260 }))
+  };
+  return series[granularity].map((point) => ({
+    label: point.label,
+    startDate: addDaysIso(-(granularity === "day" ? 14 - dailyAccuracy.length : 60)),
+    questionsTotal: point.volume,
+    questionsCorrect: Math.round(point.volume * point.accuracy / 100),
+    accuracy: point.accuracy
+  }));
 }
 
-export const demoFocusOverloadTrend: FocusOverloadPoint[] = (() => {
-  const days = 15;
-  const series: Array<[number, number, number]> = [
-    [-1, 62, 1.8],
-    [-2, 58, 1.9],
-    [-3, 66, 1.5],
-    [-4, 71, 1.2],
-    [-5, 78, 0.8],
-    [-6, 60, 1.7],
-    [-7, 74, 0.6]
-  ];
-  const out: FocusOverloadPoint[] = [];
-  const general = new Map<string, { sessions: number; planned: number; elapsed: number; deep: number }>();
-  for (let day = days; day >= 0; day--) {
-    const date = daysAgo(day);
-    const plannedDay = 60 + ((day * 17) % 40);
-    let sessionsDay = 0;
-    let elapsedDay = 0;
-    let deepDay = 0;
-    for (const [subjectId, base, slope] of series) {
-      const subject = demoSubjects.find((s) => s.id === subjectId);
-      if (!subject) continue;
-      const progress = days - day;
-      const noise = ((subjectId * 5 + day * 11) % 9) - 4;
-      const rate = Math.round(Math.min(98, Math.max(30, base + slope * progress + noise)));
-      const sessions = 1 + ((subjectId * 3 + day) % 3);
-      const planned = 30 + ((subjectId * 2 + day * 3) % 20);
-      const elapsed = Math.round(planned * rate / 100);
-      sessionsDay += sessions;
-      elapsedDay += elapsed;
-      deepDay += rate >= 85 ? sessions : 0;
-      out.push({
-        subjectId,
+export const demoSubjectAccuracyTrend: SubjectAccuracyPoint[] = (() => {
+  const days = 6;
+  const points: SubjectAccuracyPoint[] = [];
+  for (let day = days - 1; day >= 0; day--) {
+    for (const subject of demoSubjects) {
+      const glide = subject.id % 3;
+      const dayShift = (day * 2) % 18;
+      points.push({
+        subjectId: subject.id,
         subjectName: subject.name,
         color: subject.color,
-        date,
-        sessions,
-        plannedMinutes: planned,
-        elapsedMinutes: elapsed,
-        completionRate: rate,
-        deepWorkSessions: rate >= 85 ? sessions : 0
+        date: addDaysIso(-day),
+        questionsTotal: 20 + ((subject.id * 3 + day) % 6) * 6,
+        accuracy: Math.max(45, Math.min(96, subject.goalAccuracy - 14 + glide + dayShift))
       });
     }
-    general.set(date, { sessions: sessionsDay, planned: plannedDay, elapsed: elapsedDay, deep: deepDay });
   }
-  for (const [date, value] of general) {
-    out.push({
+  return points;
+})();
+
+export const demoFocusOverloadTrend: FocusOverloadPoint[] = (() => {
+  const days = 7;
+  const points: FocusOverloadPoint[] = [];
+  for (let day = days - 1; day >= 0; day--) {
+    const progress = (days - 1 - day) / (days - 1);
+    points.push({
       subjectId: 0,
       subjectName: "Geral",
-      color: "slate",
-      date,
-      sessions: value.sessions,
-      plannedMinutes: value.planned,
-      elapsedMinutes: value.elapsed,
-      completionRate: Math.round(value.elapsed / Math.max(1, value.planned) * 100),
-      deepWorkSessions: value.deep
+      color: "#94a3b8",
+      date: addDaysIso(-day),
+      sessions: 2 + (day % 3),
+      plannedMinutes: 120,
+      elapsedMinutes: Math.round(120 * (68 + progress * 20 + (day % 3) * 4)),
+      completionRate: 68 + progress * 22 + (day % 4) * 2,
+      deepWorkSessions: 1 + (day % 2)
     });
-  }
-  return out;
-})();
-
-export const demoPomodoroSessions: PomodoroSession[] = (() => {
-  const goals: Array<{ subjectId: number; goalType: PomodoroSession["goalType"]; goalText: string; pageStart: number | null; pageEnd: number | null; materialId: number | null }> = [
-    { subjectId: -1, goalType: "exercicios", goalText: "Resolver 15 exercícios de Geometria analítica", pageStart: null, pageEnd: null, materialId: -1 },
-    { subjectId: -2, goalType: "paginas", goalText: "Ler pág. 45 a 64 de Eletrostática", pageStart: 45, pageEnd: 64, materialId: -3 },
-    { subjectId: -1, goalType: "topicos", goalText: "Combinatória · princípio multiplicativo", pageStart: null, pageEnd: null, materialId: null },
-    { subjectId: -3, goalType: "paginas", goalText: "Ler pág. 12 a 28 de Termoquímica", pageStart: 12, pageEnd: 28, materialId: -5 },
-    { subjectId: -2, goalType: "exercicios", goalText: "10 questões de Campo elétrico", pageStart: null, pageEnd: null, materialId: null }
-  ];
-  const perks = [0.5, 0.6, 0.8, 0.9, 1];
-  const out: PomodoroSession[] = [];
-  goals.forEach((goal, index) => {
-    for (let day = 0; day < 3; day++) {
-      const deep = ((index * 7 + day * 5) % 4) !== 0;
-      const planned = 30 + index * 10 + day * 5;
-      const elapsed = deep ? Math.round(planned * perks[(day + index) % perks.length]) : Math.round(planned * (0.45 + ((index + day) % 3) * 0.18));
-      const subject = demoSubjects.find((s) => s.id === goal.subjectId)!;
-      const material = goal.materialId ? demoMaterialList.find((m) => m.id === goal.materialId) : undefined;
-      out.push({
-        id: -(out.length + 1),
-        subjectId: goal.subjectId,
+    for (const subject of demoSubjects) {
+      const rate = Math.min(100, subject.goalAccuracy - 18 + ((subject.id * 5 + day * 3) % 22));
+      points.push({
+        subjectId: subject.id,
         subjectName: subject.name,
         color: subject.color,
-        materialId: goal.materialId,
-        materialTitle: material?.title ?? null,
-        goalType: goal.goalType,
-        goalText: goal.goalText,
-        pageStart: goal.pageStart,
-        pageEnd: goal.pageEnd,
-        plannedMinutes: planned,
-        elapsedMinutes: elapsed,
-        interrupts: deep ? 0 : 1 + (day % 2),
-        completionRate: Math.round(elapsed / planned * 100),
-        exitReason: deep ? null : (["fadiga_metabolica", "distracao_externa", "dificuldade_materia"] as const)[day % 3],
-        completed: deep,
-        status: deep ? "done" : "partial",
-        completionPercentage: deep ? 100 : Math.round(elapsed / planned * 60),
-        startedAt: `${daysAgo(day * 2)}T${pad(9 + index)}:00:00`
+        date: addDaysIso(-day),
+        sessions: 1 + (day % 2),
+        plannedMinutes: 50,
+        elapsedMinutes: Math.round(50 * rate / 100),
+        completionRate: rate,
+        deepWorkSessions: rate >= 90 ? 1 : 0
       });
     }
-  });
-  return out;
+  }
+  return points;
 })();
 
-export const demoBrainDumps: BrainDumpLog[] = [
-  { id: -1, subjectId: -1, subjectName: "Matemática · ITA/IME", note: "Lembrar de comparar IA vs IME nos pesos.", createdAt: `${daysAgo(0)}T14:12:00` },
-  { id: -2, subjectId: null, subjectName: null, note: "Responder e-mail do professor de física.", createdAt: `${daysAgo(1)}T09:30:00` },
-  { id: -3, subjectId: -3, subjectName: "Química · Físico-Química", note: "Ideia: montar tabela de entalpia de formação.", createdAt: `${daysAgo(2)}T16:05:00` }
+/* ---------------------------------------------------------------- */
+/* Memória (FSRS) + projeção de decaimento                           */
+/* ---------------------------------------------------------------- */
+
+const retrievability = (stability: number, elapsedDays: number) => 1 / (1 + elapsedDays / (9 * stability));
+
+export const demoMemoryItems: SpacedRepetitionItem[] = [
+  { id: 501, userId: 1, subjectId: 11, subjectName: "Matemática · Geometria Plana", color: demoColorFor(11), topicId: 12, topicName: "Círculos e ângulos", concept: "Círculos e ângulos inscritos", difficulty: 6, stability: 12, reps: 3, lastReviewDate: addDaysIso(-8), dueDate: addDaysIso(4), retrievability: 0.93, createdAt: addDaysIso(-40) },
+  { id: 502, userId: 1, subjectId: 17, subjectName: "Física · Dinâmica (Leis de Newton)", color: demoColorFor(17), topicId: 22, topicName: "Leis de Newton", concept: "Diagrama de corpo livre", difficulty: 7, stability: 9, reps: 2, lastReviewDate: addDaysIso(-5), dueDate: addDaysIso(4), retrievability: 0.94, createdAt: addDaysIso(-25) },
+  { id: 503, userId: 1, subjectId: 38, subjectName: "Química · Orgânica (Nomenclatura e Funções)", color: demoColorFor(38), topicId: 31, topicName: "Cadeias carbônicas", concept: "Nomenclatura de alcanos", difficulty: 5, stability: 16, reps: 2, lastReviewDate: addDaysIso(-10), dueDate: addDaysIso(6), retrievability: 0.94, createdAt: addDaysIso(-30) },
+  { id: 504, userId: 1, subjectId: 69, subjectName: "Português · Gramática e Norma Culta", color: demoColorFor(69), topicId: 41, topicName: "Concordância verbal", concept: "Concordância verbo-nominal", difficulty: 4, stability: 20, reps: 4, lastReviewDate: addDaysIso(-12), dueDate: addDaysIso(8), retrievability: 0.94, createdAt: addDaysIso(-60) },
+  { id: 505, userId: 1, subjectId: 76, subjectName: "Inglês · Grammar and Usage", color: demoColorFor(76), topicId: null, topicName: null, concept: "Phrasal verbs · look up, give up", difficulty: 3, stability: 28, reps: 6, lastReviewDate: addDaysIso(-20), dueDate: addDaysIso(8), retrievability: 0.93, createdAt: addDaysIso(-80) },
+  { id: 506, userId: 1, subjectId: 98, subjectName: "Faculdade · Algoritmos e Estruturas de Dados", color: demoColorFor(98), topicId: 61, topicName: "Complexidade de algoritmos", concept: "O(n log n) do mergesort", difficulty: 6, stability: 10, reps: 1, lastReviewDate: addDaysIso(-3), dueDate: addDaysIso(7), retrievability: 0.97, createdAt: addDaysIso(-12) }
 ];
 
-export const demoTimedboxes: TimeboxSuggestion[] = [
-  { subjectId: -1, subjectName: "Matemática · ITA/IME", color: "indigo", resistanceIndex: 0.88, completedStreak: 3, previousMinutes: 45, suggestedMinutes: 50, reason: "2+ janelas concluídas em sequência (ZDP sustentada): +5 min de sobrecarga progressiva." },
-  { subjectId: -2, subjectName: "Física · Mecânica e Eletromagnetismo", color: "violet", resistanceIndex: 0.5, completedStreak: 1, previousMinutes: 35, suggestedMinutes: 35, reason: "Janela estável: mantenha o timebox atual e evolua quando houver 2 vitórias seguidas." }
-];
-
-export const demoStrategies: MaterialStrategy[] = [
-  { id: 1, keywords: "fundamentos, matemática, elementar", tactic: "Prática de Recuperação prioritária", reason: "Livros clássicos de base exigem recuperação ativa pós-leitura: consolida a lógica, não leitura passiva.", intensity: "alta" },
-  { id: 2, keywords: "problemas, física", tactic: "Resolução em Deep Work", reason: "Problemas abertos exigem contexto mental descarregado; não interrompa no meio da sessão.", intensity: "alta" },
-  { id: 3, keywords: "gramática, língua", tactic: "Spaced Repetition + lembrete", reason: "Regras linguísticas têm alta retrievability inicial; o lembrete de revisão reforça a curva FSRS.", intensity: "media" }
-];
-
-export const demoBufferAllocations: BufferAllocation[] = [
-  { id: -1, subjectId: -2, subjectName: "Física · Mecânica e Eletromagnetismo", color: "violet", sourceGoal: "Ler pág. 45 a 64 de Eletrostática", debtMinutes: 18, destination: "saturday", status: "queued", createdAt: daysAgo(0) },
-  { id: -2, subjectId: -1, subjectName: "Matemática · ITA/IME", color: "indigo", sourceGoal: "Combinatória · princípio multiplicativo", debtMinutes: 12, destination: "next_week", status: "queued", createdAt: daysAgo(0) }
-];
-
-export const demoReschedulePlan: ReschedulePlan = {
-  generatedDate: daysAgo(0),
-  totalDebtMinutes: 30,
-  saturdayMinutes: 18,
-  nextWeekMinutes: 12,
-  protectedMorningHours: 6,
-  items: [
-    { sourceSessionId: -9, subjectId: -2, subjectName: "Física · Mecânica e Eletromagnetismo", color: "violet", goal: "Ler pág. 45 a 64 de Eletrostática", plannedMinutes: 45, executedMinutes: 27, debtMinutes: 18, destination: "saturday", destinationLabel: "Sábado à tarde · Project Buffer" },
-    { sourceSessionId: -8, subjectId: -1, subjectName: "Matemática · ITA/IME", color: "indigo", goal: "Combinatória · princípio multiplicativo", plannedMinutes: 30, executedMinutes: 18, debtMinutes: 12, destination: "next_week", destinationLabel: "Semana seguinte · redistribuição" }
-  ]
-};
-
-export const demoPlan: PlanResponse = {
-  weeks: 6,
-  riskName: "Matemática · ITA/IME",
-  days: Array.from({ length: 14 }, (_, offset) => {
-    const date = new Date();
-    date.setDate(date.getDate() + offset);
-    const weekday = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"][(date.getDay() + 6) % 7];
-    const early = offset % 7 <= 2;
-    return {
-      date: isoDate(date),
-      weekdayLabel: weekday,
-      focusSubjects: [
-        { subjectId: -1, subjectName: "Matemática · ITA/IME", color: "indigo", risk: 9, minutes: early ? 55 : 45, slot: early ? "Janela matutina · aquecimento pós-sono" : "Bloco principal" },
-        { subjectId: -2, subjectName: "Física · Mecânica e Eletromagnetismo", color: "violet", risk: 7, minutes: early ? 40 : 35, slot: early ? "Segundo alvo · alternância" : "Tarde · reforço de déficit" }
-      ]
-    };
-  })
-};
-
-/* ------------------------------------------------------------------ */
-/* Motor de Repetição Espaçada (FSRS) — dados de demonstração          */
-/* ------------------------------------------------------------------ */
-
-const ROUND2 = (value: number) => Math.round(value * 100) / 100;
-
-export const calcRetrievability = (stability: number, elapsedDays: number) => {
-  if (stability <= 0) return 0;
-  return 1 / (1 + Math.max(0, elapsedDays) / (9 * stability));
-};
-
-const startOfDay = (value: string | Date) => {
-  const date = typeof value === "string" ? new Date(`${value}T12:00:00`) : new Date(value);
-  date.setHours(0, 0, 0, 0);
-  return date;
-};
-
-const daysBetween = (from: string, to: string) =>
-  Math.round((startOfDay(to).getTime() - startOfDay(from).getTime()) / 86_400_000);
-
-const isoInDays = (from: string, days: number) => {
-  const date = startOfDay(from);
-  date.setDate(date.getDate() + days);
-  return isoDate(date);
-};
-
-const difficultyScale = (difficulty: number) => 0.9 + (10 - Math.min(10, Math.max(1, difficulty))) * 0.02;
-
-export const applyDemoGrade = (grade: ReviewGrade, difficulty: number) =>
-  ({ again: 0.8, hard: 1.2, good: 2.2, easy: 3.0 })[grade] * difficultyScale(difficulty);
-
-const memorySeed: Array<{ subjectId: number; topicId: number; topicName: string; concept: string; difficulty: number; stability: number; reps: number; daysAgoReviewed: number }> = [
-  { subjectId: -1, topicId: -1, topicName: "Números complexos", concept: "Números complexos · forma polar", difficulty: 7, stability: 24, reps: 4, daysAgoReviewed: 12 },
-  { subjectId: -2, topicId: -5, topicName: "Eletrostática", concept: "Eletrostática · Lei de Coulomb", difficulty: 8, stability: 14, reps: 3, daysAgoReviewed: 15 },
-  { subjectId: -3, topicId: -7, topicName: "Estequiometria", concept: "Termoquímica · entalpia de formação", difficulty: 6, stability: 9, reps: 2, daysAgoReviewed: 11 },
-  { subjectId: -4, topicId: -10, topicName: "Dissertação", concept: "Dissertação · estrutura do parágrafo", difficulty: 4, stability: 18, reps: 5, daysAgoReviewed: 4 }
-];
-
-export const demoMemoryItems: SpacedRepetitionItem[] = memorySeed.map((seed, index) => {
-  const subject = demoSubjects.find((s) => s.id === seed.subjectId)!;
-  const lastReviewDate = daysAgo(seed.daysAgoReviewed);
-  const elapsed = seed.daysAgoReviewed;
-  return {
-    id: -(101 + index),
-    userId: 1,
-    subjectId: subject.id,
-    subjectName: subject.name,
-    color: subject.color,
-    topicId: seed.topicId,
-    topicName: seed.topicName,
-    concept: seed.concept,
-    difficulty: seed.difficulty,
-    stability: seed.stability,
-    reps: seed.reps,
-    lastReviewDate,
-    dueDate: isoInDays(lastReviewDate, seed.stability),
-    retrievability: ROUND2(calcRetrievability(seed.stability, elapsed)),
-    createdAt: ""
-  };
-});
-
-export function buildMemoryDecayProjection(item: SpacedRepetitionItem, horizonDays?: number): MemoryDecayProjection {
-  const today = daysAgo(0);
-  const elapsed = daysBetween(item.lastReviewDate, today);
-  const retrievabilityToday = calcRetrievability(item.stability, elapsed);
-  const optimalDay = Math.max(1, Math.round(item.stability));
-  const optimalDate = isoInDays(item.lastReviewDate, optimalDay);
-  const horizon = horizonDays ?? Math.min(180, Math.max(30, Math.ceil(item.stability * 4)));
-
-  const points: MemoryPoint[] = [];
+export const buildMemoryDecayProjection = (item: SpacedRepetitionItem): MemoryDecayProjection => {
+  const sinceLastReview = Math.max(0, Math.round((Date.now() - new Date(`${item.lastReviewDate}T12:00:00`).getTime()) / 86400000));
+  const todayR = retrievability(item.stability, sinceLastReview) * 100;
+  const until90 = pointCrossesAtRetrievability(item.stability, sinceLastReview);
+  const horizon = Math.max(30, Math.round(item.stability * 2));
+  const points: MemoryDecayProjection["points"] = [];
   let ankiStability = item.stability;
-  let ankiElapsed = 0;
+  let nextReset = Math.max(1, until90);
   for (let day = 0; day <= horizon; day++) {
-    const plain = calcRetrievability(item.stability, day);
-    const reviewed = ankiElapsed > 0 && ankiElapsed >= ankiStability;
-    const anki = reviewed
-      ? ((ankiStability *= 2.2 * difficultyScale(item.difficulty)), (ankiElapsed = 0), 1)
-      : calcRetrievability(ankiStability, ankiElapsed);
-    points.push({
-      itemId: item.id,
-      day,
-      date: isoInDays(item.lastReviewDate, day),
-      retrievability: plain,
-      anki,
-      reviewed
-    });
-    ankiElapsed += 1;
+    const r = retrievability(item.stability, sinceLastReview + day) * 100;
+    const a = retrievability(ankiStability, Math.max(0, day - nextReset)) * 100;
+    points.push({ itemId: item.id, day, date: addDaysIso(day), retrievability: r, anki: a, reviewed: day === nextReset });
+    if (day === nextReset) {
+      ankiStability *= 2.2;
+      nextReset = Math.max(1, day + Math.round(ankiStability));
+    }
   }
-
   return {
     itemId: item.id,
     concept: item.concept,
@@ -536,146 +300,186 @@ export function buildMemoryDecayProjection(item: SpacedRepetitionItem, horizonDa
     color: item.color,
     stability: item.stability,
     difficulty: item.difficulty,
-    optimalDay,
-    optimalDate,
-    retrievabilityToday,
-    dueInDays: Math.max(0, Math.ceil(optimalDay - elapsed)),
+    optimalDay: until90,
+    optimalDate: addDaysIso(until90),
+    retrievabilityToday: Math.round(todayR * 10) / 10,
+    dueInDays: until90,
     points
   };
-}
-
-const DEMO_RETENTION_HEX: Record<string, string> = {
-  indigo: "#8b7cf6", violet: "#a78bfa", cyan: "#22d3ee", pink: "#f472b6",
-  amber: "#fbbf24", emerald: "#34d399", orange: "#fb923c", slate: "#94a3b8"
 };
-const RETENTION_PALETTE = ["#8b7cf6", "#a78bfa", "#22d3ee", "#f472b6", "#34d399", "#fbbf24", "#fb923c", "#60a5fa", "#2dd4bf", "#f9a8d4"];
 
-interface RetBucket {
-  subjectId: number;
-  topicId: number;
-  topicName: string;
-  stability: number;
-  elapsed: number;
-  items: number;
-}
+const pointCrossesAtRetrievability = (stability: number, sinceLastReview: number) => {
+  let day = 0;
+  while (retrievability(stability, sinceLastReview + day) * 100 > 90 && day < 400) day++;
+  return day;
+};
 
-const retentionBuckets: RetBucket[] = [
-  { subjectId: -1, topicId: 0, topicName: "", stability: 26, elapsed: 6, items: 4 },
-  { subjectId: -1, topicId: -1, topicName: "Números complexos", stability: 24, elapsed: 12, items: 2 },
-  { subjectId: -1, topicId: -2, topicName: "Geometria analítica", stability: 12, elapsed: 20, items: 3 },
-  { subjectId: -2, topicId: 0, topicName: "", stability: 18, elapsed: 9, items: 4 },
-  { subjectId: -2, topicId: -5, topicName: "Eletrostática", stability: 14, elapsed: 15, items: 3 },
-  { subjectId: -2, topicId: -4, topicName: "Cinemática", stability: 30, elapsed: 3, items: 2 },
-  { subjectId: -3, topicId: 0, topicName: "", stability: 12, elapsed: 10, items: 3 },
-  { subjectId: -3, topicId: -7, topicName: "Estequiometria", stability: 8, elapsed: 17, items: 3 },
-  { subjectId: -3, topicId: -8, topicName: "Termoquímica", stability: 16, elapsed: 7, items: 2 },
-  { subjectId: -4, topicId: 0, topicName: "", stability: 20, elapsed: 5, items: 3 },
-  { subjectId: -4, topicId: -9, topicName: "Interpretação de texto", stability: 22, elapsed: 14, items: 2 },
-  { subjectId: -5, topicId: 0, topicName: "", stability: 28, elapsed: 8, items: 2 },
-  { subjectId: -6, topicId: 0, topicName: "", stability: 10, elapsed: 12, items: 2 },
-  { subjectId: -7, topicId: 0, topicName: "", stability: 14, elapsed: 16, items: 2 }
+/* ---------------------------------------------------------------- */
+/* Overview de retenção (por matéria e nicho)                        */
+/* ---------------------------------------------------------------- */
+
+export const demoRetentionOverview: RetentionOverview = buildRetentionOverview({
+  items: demoMemoryItems,
+  subjects: demoSubjects,
+  horizonDays: 60
+});
+
+/* ---------------------------------------------------------------- */
+/* Rota de prova (plano reverso)                                     */
+/* ---------------------------------------------------------------- */
+
+const DAY_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+
+export const buildDemoPlan = (subjectList: Subject[]): PlanResponse => {
+  const ordered = [...subjectList].sort((a, b) => b.computedIp - a.computedIp);
+  const toFocus = (subject: Subject, slot: string, minutes: number, risk: number): PlanFocus => ({
+    subjectId: subject.id,
+    subjectName: subject.name,
+    color: subject.color,
+    risk,
+    minutes,
+    slot
+  });
+  const days: PlanDay[] = [];
+  for (let index = 0; index < 14; index++) {
+    const date = addDaysIso(index);
+    const weekday = new Date(`${date}T12:00:00`).getDay();
+    const primary = ordered[index % ordered.length];
+    const secondary = ordered[(index * 2 + 1) % ordered.length];
+    const planned = [
+      toFocus(primary, "manhã", 60 + (index % 2) * 10, 8 - index % 3)
+    ];
+    if (secondary.id !== primary.id) {
+      planned.push(toFocus(secondary, secondary.id > primary.id ? "tarde" : "noite", 45 + (index % 2) * 10, 4));
+    }
+    days.push({ date, weekdayLabel: DAY_LABELS[(weekday + 7 - 1) % 7], focusSubjects: planned });
+  }
+  return { weeks: 12, riskName: ordered[0]?.name ?? null, days };
+};
+
+export const demoPlan: PlanResponse = buildDemoPlan(demoSubjects);
+
+/* ---------------------------------------------------------------- */
+/* Foco: sessões, sugestões de timebox e capturas                   */
+/* ---------------------------------------------------------------- */
+
+export const demoFocusSessions: FocusSession[] = [
+  { id: 701, subjectId: 17, subjectName: "Física · Dinâmica (Leis de Newton)", color: demoColorFor(17), materialId: 102, materialTitle: "Tópicos de Física · Vol. 1", goalType: "paginas", goalText: "Ler pág. 180 a 195", pageStart: 180, pageEnd: 195, plannedMinutes: 60, elapsedMinutes: 45, interrupts: 2, completionRate: 75, zone: "media", exitReason: "fadiga_metabolica", completed: true, status: "partial", completionPercentage: 60, startedAt: addDaysIso(-1) },
+  { id: 702, subjectId: 11, subjectName: "Matemática · Geometria Plana", color: demoColorFor(11), materialId: 101, materialTitle: "Fundamentos da Matemática Elementar · Vol. 9", goalType: "paginas", goalText: "Ler pág. 210 a 235", pageStart: 210, pageEnd: 235, plannedMinutes: 50, elapsedMinutes: 56, interrupts: 0, completionRate: 100, zone: "baixa", exitReason: null, completed: true, status: "done", completionPercentage: 95, startedAt: addDaysIso(-1) },
+  { id: 703, subjectId: 38, subjectName: "Química · Orgânica (Nomenclatura e Funções)", color: demoColorFor(38), materialId: 103, materialTitle: "Química Orgânica · Usberco", goalType: "topicos", goalText: "Dominar nomenclatura de alcanos", pageStart: null, pageEnd: null, plannedMinutes: 40, elapsedMinutes: 20, interrupts: 3, completionRate: 50, zone: "alta", exitReason: "distracao_externa", completed: true, status: "partial", completionPercentage: 45, startedAt: addDaysIso(-2) },
+  { id: 704, subjectId: 69, subjectName: "Português · Gramática e Norma Culta", color: demoColorFor(69), materialId: 104, materialTitle: "Gramática da Língua Portuguesa", goalType: "topicos", goalText: "Revisar concordância verbal", pageStart: null, pageEnd: null, plannedMinutes: 35, elapsedMinutes: 38, interrupts: 1, completionRate: 100, zone: "baixa", exitReason: null, completed: true, status: "done", completionPercentage: 90, startedAt: addDaysIso(-3) },
+  { id: 705, subjectId: 98, subjectName: "Faculdade · Algoritmos e Estruturas de Dados", color: demoColorFor(98), materialId: 106, materialTitle: "The Algorithm Design Manual", goalType: "paginas", goalText: "Ler pág. 40 a 55", pageStart: 40, pageEnd: 55, plannedMinutes: 45, elapsedMinutes: 15, interrupts: 2, completionRate: 33, zone: "alta", exitReason: "dificuldade_materia", completed: true, status: "partial", completionPercentage: 40, startedAt: addDaysIso(-4) },
+  { id: 706, subjectId: 76, subjectName: "Inglês · Grammar and Usage", color: demoColorFor(76), materialId: 105, materialTitle: "English in Use · Intermediate", goalType: "exercicios", goalText: "10 exercícios de phrasal verbs", pageStart: null, pageEnd: null, plannedMinutes: 30, elapsedMinutes: 32, interrupts: 0, completionRate: 100, zone: "baixa", exitReason: null, completed: true, status: "done", completionPercentage: 92, startedAt: addDaysIso(-5) },
+  { id: 707, subjectId: 11, subjectName: "Matemática · Geometria Plana", color: demoColorFor(11), materialId: 101, materialTitle: "Fundamentos da Matemática Elementar · Vol. 9", goalType: "paginas", goalText: "Ler pág. 235 a 250", pageStart: 235, pageEnd: 250, plannedMinutes: 55, elapsedMinutes: 30, interrupts: 1, completionRate: 55, zone: "media", exitReason: "meta_concluida", completed: true, status: "partial", completionPercentage: 70, startedAt: addDaysIso(-6) },
+  { id: 708, subjectId: 17, subjectName: "Física · Dinâmica (Leis de Newton)", color: demoColorFor(17), materialId: 102, materialTitle: "Tópicos de Física · Vol. 1", goalType: "exercicios", goalText: "Resolver 12 exercícios de dinâmica", pageStart: null, pageEnd: null, plannedMinutes: 60, elapsedMinutes: 62, interrupts: 0, completionRate: 100, zone: "baixa", exitReason: null, completed: true, status: "done", completionPercentage: 88, startedAt: addDaysIso(-7) },
+  { id: 709, subjectId: 38, subjectName: "Química · Orgânica (Nomenclatura e Funções)", color: demoColorFor(38), materialId: 103, materialTitle: "Química Orgânica · Usberco", goalType: "paginas", goalText: "Ler pág. 96 a 112", pageStart: 96, pageEnd: 112, plannedMinutes: 45, elapsedMinutes: 40, interrupts: 1, completionRate: 89, zone: "media", exitReason: null, completed: false, status: "buffered", completionPercentage: 80, startedAt: addDaysIso(-8) }
 ];
 
-const R_AT = (stability: number, elapsed: number) => round1(calcRetrievability(stability, elapsed) * 100);
+export const timeboxSuggestionFor = (subject: Subject): TimeboxSuggestion => ({
+  subjectId: subject.id,
+  subjectName: subject.name,
+  color: subject.color,
+  resistanceIndex: 40 + (subject.id % 4) * 12,
+  completedStreak: 1 + (subject.id % 3),
+  previousMinutes: 45 + (subject.id % 3) * 5,
+  suggestedMinutes: 45 + (subject.id % 3) * 10,
+  reason: subject.computedIp >= 25
+    ? `Matéria densa recém-iniciada — inicie com ${45 + (subject.id % 3) * 10} min e evolua conforme a sustentação.`
+    : "Histórico estável de deep work — mantenha o timebox atual e acrescente 5 min a cada dois blocos concluídos."
+});
 
-export const demoRetentionOverview: RetentionOverview = (() => {
-  const horizonDays = 60;
-  const today = daysAgo(0);
-  const bucketsOfSubject = (subjectId: number) => retentionBuckets.filter((b) => b.subjectId === subjectId);
-  const subjectLetters = [...demoSubjects].sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }));
+export const demoBrainDumps: BrainDumpLog[] = [
+  { id: 801, subjectId: 17, subjectName: "Física · Dinâmica (Leis de Newton)", note: "Lembrar de conferir a fórmula de atrito nos exercícios da prova antiga do IME.", createdAt: addDaysIso(-2) },
+  { id: 802, subjectId: null, subjectName: null, note: "Pesquisar a lista de câmpus da faculdade que abre inscrição na semana que vem.", createdAt: addDaysIso(-3) },
+  { id: 803, subjectId: 11, subjectName: "Matemática · Geometria Plana", note: "Revisar o teorema do ângulo inscrito antes da lista nova.", createdAt: addDaysIso(-5) }
+];
 
-  const series: RetentionSeriesInfo[] = [];
-  const totalItems = retentionBuckets.reduce((sum, b) => sum + b.items, 0);
+/* ---------------------------------------------------------------- */
+/* Triage WBS: buffer, plano de reagendamento                       */
+/* ---------------------------------------------------------------- */
 
-  const meanAt = (buckets: RetBucket[]) => (day: number) => {
-    const weighted = buckets.reduce((sum, b) => sum + b.items * calcRetrievability(b.stability, b.elapsed + day), 0);
-    const weight = buckets.reduce((sum, b) => sum + b.items, 0);
-    return weight ? (weighted / weight) * 100 : 0;
+export const demoBufferAllocations: BufferAllocation[] = [
+  { id: 851, subjectId: 38, subjectName: "Química · Orgânica (Nomenclatura e Funções)", color: demoColorFor(38), sourceGoal: "Dominar nomenclatura de alcanos", debtMinutes: 20, destination: "saturday", status: "queued", createdAt: addDaysIso(-2) },
+  { id: 852, subjectId: 98, subjectName: "Faculdade · Algoritmos e Estruturas de Dados", color: demoColorFor(98), sourceGoal: "Ler pág. 40 a 55", debtMinutes: 30, destination: "next_week", status: "queued", createdAt: addDaysIso(-4) },
+  { id: 853, subjectId: 11, subjectName: "Matemática · Geometria Plana", color: demoColorFor(11), sourceGoal: "Ler pág. 235 a 250", debtMinutes: 25, destination: "saturday", status: "queued", createdAt: addDaysIso(-6) }
+];
+
+export const demoReschedulePlan: ReschedulePlan = {
+  generatedDate: todayIso(),
+  totalDebtMinutes: 75,
+  saturdayMinutes: 45,
+  nextWeekMinutes: 30,
+  protectedMorningHours: 3,
+  items: [
+    { sourceSessionId: 703, subjectId: 38, subjectName: "Química · Orgânica (Nomenclatura e Funções)", color: demoColorFor(38), goal: "Dominar nomenclatura de alcanos", plannedMinutes: 40, executedMinutes: 20, debtMinutes: 20, destination: "saturday", destinationLabel: "Sábado à tarde" },
+    { sourceSessionId: 705, subjectId: 98, subjectName: "Faculdade · Algoritmos e Estruturas de Dados", color: demoColorFor(98), goal: "Ler pág. 40 a 55", plannedMinutes: 45, executedMinutes: 15, debtMinutes: 30, destination: "next_week", destinationLabel: "Semana seguinte" },
+    { sourceSessionId: 707, subjectId: 11, subjectName: "Matemática · Geometria Plana", color: demoColorFor(11), goal: "Ler pág. 235 a 250", plannedMinutes: 55, executedMinutes: 30, debtMinutes: 25, destination: "saturday", destinationLabel: "Sábado à tarde" }
+  ]
+};
+
+/* ---------------------------------------------------------------- */
+/* Estratégias de material (Biblioteca)                              */
+/* ---------------------------------------------------------------- */
+
+export const demoMaterialStrategies: MaterialStrategy[] = [
+  { id: 1, keywords: "questões ita questões", tactic: "Banco cronológico: 3 questões em 10 min, conferindo resolução no fim do bloco.", reason: "Lista de questões com cobrança de vestibular precisa de ritmo de prova, não de leitura linear.", intensity: "Alta" },
+  { id: 2, keywords: "teoria resumo esquema", tactic: "Ficha de síntese: leia o capítulo em 25 min e escreva um mapa mental de 10 itens.", reason: "Material teórico denso rende mais quando é destilado em estrutura própria.", intensity: "Média" },
+  { id: 3, keywords: "curso vídeo aula vídeo", tactic: "Método Feynman: a cada 15 min de vídeo, explique o trecho em voz alta sem apoio.", reason: "Vídeo é passivo; a checagem ativa evita a ilusão de fluência.", intensity: "Média" },
+  { id: 4, keywords: "apostila pdf lista", tactic: "Resolução ativa: use papel em branco e finalize cada exercício antes de consultar o gabarito.", reason: "Prática sem consulta consolida o traço de memória de resolução.", intensity: "Alta" },
+  { id: 5, keywords: "gramática vocabulário", tactic: "Flashcards espalhados: 10 cartas por sessão com repetição espaçada pelo motor FSRS.", reason: "Regras e vocabulário são memorização pura — o FSRS evita o esquecimento.", intensity: "Baixa" }
+];
+
+export const demoProfile: Profile = { dailyHours: 6, weeklyDays: 6, examTrack: "ITA", startDate: addDaysIso(-120), examDate: addDaysIso(92), studyDays: [0, 1, 2, 3, 4, 5] };
+
+/* ---------------------------------------------------------------- */
+/* Livestream de retenção (demo) — amostras em tempo real por        */
+/* matéria, usadas no card "Retenção · livestream" do Desempenho.    */
+/* `overdue`/`manyPartials` sinalizam atraso e excesso de blocos     */
+/* parciais (pisca vermelho + alerta sonoro). Os demais dados        */
+/* derivam das coleções demo existentes para bater com o painel.     */
+/* ---------------------------------------------------------------- */
+
+const MANY_PARTIALS_THRESHOLD = 3;
+
+export const demoRetentionLivestreamTicks: RetentionLiveTick[] = demoSubjects.map((subject, index) => {
+  const row = demoRanking.find((entry) => entry.id === subject.id);
+  const partialSessions = demoFocusSessions.filter((session) => session.subjectId === subject.id && session.zone === "baixa" && session.status === "partial");
+  const dueSoon = demoMemoryItems.filter((item) => item.subjectId === subject.id && item.dueDate <= addDaysIso(3)).length;
+  const accuracy = row?.accuracy ?? 70;
+  return {
+    subjectId: subject.id,
+    subjectName: subject.name,
+    color: subject.color,
+    accuracy,
+    retentionDelta: ((index % 4) === 0 ? -8 - index : 3 + index % 5),
+    overdue: dueSoon > 0 && accuracy < 62,
+    manyPartials: partialSessions.length >= MANY_PARTIALS_THRESHOLD
   };
+});
 
-  series.push({
-    key: "Média Geral",
-    name: "Média Geral",
-    level: "global",
-    subjectId: 0,
-    topicId: 0,
-    color: "#94a3b8",
-    items: totalItems,
-    avgStability: round1(retentionBuckets.reduce((s, b) => s + b.stability * b.items, 0) / totalItems),
-    retrievabilityToday: R_AT(
-      round1(retentionBuckets.reduce((s, b) => s + b.stability * b.items, 0) / totalItems),
-      round1(retentionBuckets.reduce((s, b) => s + b.elapsed * b.items, 0) / totalItems)
-    ),
-    dueInDays: Math.max(0, ...retentionBuckets.map((b) => Math.ceil(b.stability - b.elapsed)))
-  });
-
-  subjectLetters.forEach((subject, subjectIndex) => {
-    const buckets = bucketsOfSubject(subject.id);
-    if (!buckets.length) return;
-    const mean = meanAt(buckets);
-    const weightedElapsed = buckets.reduce((s, b) => s + b.elapsed * b.items, 0) / buckets.reduce((s, b) => s + b.items, 0);
-    series.push({
-      key: subject.name,
-      name: subject.name,
-      level: "subject",
-      subjectId: subject.id,
-      topicId: 0,
-      color: DEMO_RETENTION_HEX[subject.color] ?? RETENTION_PALETTE[subjectIndex % RETENTION_PALETTE.length],
-      items: buckets.reduce((s, b) => s + b.items, 0),
-      avgStability: round1(buckets.reduce((s, b) => s + b.stability * b.items, 0) / buckets.reduce((s, b) => s + b.items, 0)),
-      retrievabilityToday: round1(mean(0)),
-      dueInDays: Math.max(0, ...buckets.map((b) => Math.ceil(b.stability - b.elapsed)))
+/* ------------------------------------------------------------------ */
+/* T6 — Livestream de retenção (rota humilde). O card no            */
+/* PerformanceView avança as amostras reais da demo quando o demo    */
+/* está ativo; dispara o aviso vermelho quando `overdue`/`many`.     */
+/* ------------------------------------------------------------------ */
+export const demoRetentionLivestream: RetentionLiveStream[] = (() => {
+  const base = [...demoRetentionLivestreamTicks];
+  const ticks: RetentionLiveStream[] = [];
+  for (let windowStart = 0; windowStart < demoRanking.length; windowStart += 273) {
+    const generatedAt = addDaysIso(-8 + Math.floor(windowStart / demoRanking.length));
+    ticks.push({
+      generatedAt,
+      horizonMinutes: 54,
+      ticks: demoSubjects.map((subject, index) => {
+        const live = base[index];
+        return {
+          ...live,
+          retentionDelta: live.retentionDelta + (windowStart % 7)
+        };
+      })
     });
-  });
-
-  const parentSeries = new Map<number, string>();
-  series.filter((s) => s.level === "subject").forEach((s) => parentSeries.set(s.subjectId, s.color));
-  subjectLetters.forEach((subject, subjectIndex) => {
-    const nicheBuckets = bucketsOfSubject(subject.id).filter((b) => b.topicId !== 0);
-    nicheBuckets.forEach((bucket, topicIndex) => {
-      const parent = parentSeries.get(bucket.subjectId);
-      let color = RETENTION_PALETTE[(subjectIndex * 2 + topicIndex) % RETENTION_PALETTE.length];
-      if (color === parent) {
-        color = RETENTION_PALETTE[(subjectIndex * 2 + topicIndex + 3) % RETENTION_PALETTE.length];
-      }
-      series.push({
-        key: `${subject.name} › ${bucket.topicName}`,
-        name: `${subject.name} › ${bucket.topicName}`,
-        level: "topic",
-        subjectId: bucket.subjectId,
-        topicId: bucket.topicId,
-        color,
-        items: bucket.items,
-        avgStability: bucket.stability,
-        retrievabilityToday: R_AT(bucket.stability, bucket.elapsed),
-        dueInDays: Math.max(0, Math.ceil(bucket.stability - bucket.elapsed))
-      });
-    });
-  });
-
-  const rows: Array<Record<string, number | string>> = [];
-  for (let day = 0; day <= horizonDays; day++) {
-    const row: Record<string, number | string> = { day, date: isoInDays(today, day) };
-    series.forEach((s) => {
-      let value: number;
-      if (s.level === "global") {
-        value = round1(demoRetentionRowsByBucket(retentionBuckets, day));
-      } else if (s.level === "subject") {
-        value = round1(demoRetentionRowsByBucket(bucketsOfSubject(s.subjectId), day));
-      } else {
-        const bucket = retentionBuckets.find((b) => b.topicId === s.topicId);
-        value = bucket ? round1(calcRetrievability(bucket.stability, bucket.elapsed + day) * 100) : 0;
-      }
-      row[s.key] = value;
-    });
-    rows.push(row);
   }
-
-  return { generatedDate: today, horizonDays, series, rows };
+  return ticks;
 })();
+  
 
-function demoRetentionRowsByBucket(buckets: RetBucket[], day: number): number {
-  const weighted = buckets.reduce((sum, b) => sum + b.items * calcRetrievability(b.stability, b.elapsed + day), 0);
-  const weight = buckets.reduce((sum, b) => sum + b.items, 0);
-  return weight ? (weighted / weight) * 100 : 0;
-}

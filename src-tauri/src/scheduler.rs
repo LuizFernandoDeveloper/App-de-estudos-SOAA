@@ -74,6 +74,60 @@ pub fn calculate_schedule(subjects: &[Subject], total_hours: f64) -> Result<Sche
     })
 }
 
+/* ---------------------------------------------------------------- */
+/* Motor de Repetição Espaçada (modelo FSRS simplificado)            */
+/* ---------------------------------------------------------------- */
+
+pub fn today_iso() -> String {
+    chrono::Local::now().date_naive().to_string()
+}
+
+pub fn parse_date(value: &str) -> chrono::NaiveDate {
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .unwrap_or_else(|_| chrono::Local::now().date_naive())
+}
+
+pub fn days_since(from: &str, to: &str) -> f64 {
+    (parse_date(to) - parse_date(from)).num_days() as f64
+}
+
+/// R(t) = (1 + t / (9 * S))^-1
+/// R = probabilidade de lembrança; S = Stability em dias (R cai a 90% em t = S).
+pub fn calculate_retrievability(stability: f64, elapsed_days: f64) -> f64 {
+    let stability = stability.max(0.01);
+    let value = 1.0 / (1.0 + elapsed_days.max(0.0) / (9.0 * stability));
+    value.clamp(0.0, 1.0)
+}
+
+pub fn due_date_iso(last_review: &str, stability: f64) -> String {
+    let days = stability.round().max(1.0) as i64;
+    (parse_date(last_review) + chrono::Duration::days(days)).to_string()
+}
+
+pub fn grade_multiplier(grade: &str) -> f64 {
+    match grade {
+        "again" => 0.8,
+        "hard" => 1.2,
+        "good" => 2.2,
+        "easy" => 3.0,
+        _ => 2.2,
+    }
+}
+
+pub fn grade_label(grade: &str) -> String {
+    match grade {
+        "again" => "Errei".into(),
+        "hard" => "Difícil".into(),
+        "good" => "Bom".into(),
+        "easy" => "Fácil".into(),
+        _ => "Bom".into(),
+    }
+}
+
+pub fn difficulty_scale(difficulty: f64) -> f64 {
+    0.9 + (10.0 - difficulty.clamp(1.0, 10.0)) * 0.02
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +168,43 @@ mod tests {
     #[test]
     fn rejects_empty_subjects() {
         assert!(calculate_schedule(&[], 4.0).is_err());
+    }
+
+    #[test]
+    fn retrievability_is_90_percent_at_stability_days() {
+        let retrievability = calculate_retrievability(10.0, 10.0);
+        assert!((retrievability - 0.9).abs() < 0.001);
+    }
+
+    #[test]
+    fn retrievability_decays_with_elapsed_days() {
+        let day_1 = calculate_retrievability(5.0, 1.0);
+        let day_30 = calculate_retrievability(5.0, 30.0);
+        assert!(day_1 > day_30);
+        assert!(day_30 >= 0.0 && day_30 <= 1.0);
+    }
+
+    #[test]
+    fn due_date_adds_stability_days() {
+        assert_eq!(due_date_iso("2026-08-01", 12.0), "2026-08-13");
+    }
+
+    #[test]
+    fn grade_multipliers_raise_stability() {
+        let base = 10.0;
+        assert!(base * grade_multiplier("again") < base * grade_multiplier("hard"));
+        assert!(base * grade_multiplier("hard") < base * grade_multiplier("good"));
+        assert!(base * grade_multiplier("good") < base * grade_multiplier("easy"));
+    }
+
+    #[test]
+    fn difficulty_scale_flattens_hard_items() {
+        assert!(difficulty_scale(1.0) > difficulty_scale(10.0));
+        assert_eq!(difficulty_scale(5.0), 1.0);
+    }
+
+    #[test]
+    fn days_since_counts_calendar_days() {
+        assert_eq!(days_since("2026-08-01", "2026-08-11"), 10.0);
     }
 }

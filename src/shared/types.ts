@@ -101,6 +101,7 @@ export interface Profile {
   examTrack: ExamTrack;
   startDate: string | null;
   examDate: string | null;
+  studyDays: number[];
 }
 
 export interface SubjectPerformance {
@@ -182,8 +183,9 @@ export type EarlyExitReason =
   | "meta_concluida";
 export type SessionStatus = "pending" | "partial" | "done" | "buffered";
 export type BufferDestination = "saturday" | "next_week";
+export type FocusZone = "alta" | "media" | "baixa";
 
-export interface PomodoroSessionInput {
+export interface FocusSessionInput {
   subjectId: number;
   materialId: number | null;
   goalType: FocusGoalType;
@@ -198,7 +200,7 @@ export interface PomodoroSessionInput {
   startedAt: string;
 }
 
-export interface PomodoroSession {
+export interface FocusSession {
   id: number;
   subjectId: number;
   subjectName: string;
@@ -213,6 +215,8 @@ export interface PomodoroSession {
   elapsedMinutes: number;
   interrupts: number;
   completionRate: number;
+  /** Zona de dificuldade de foco calculada no backend. */
+  zone: FocusZone;
   exitReason: EarlyExitReason | null;
   completed: boolean;
   status: SessionStatus;
@@ -387,7 +391,7 @@ export interface MemoryItemInput {
   difficulty: number;
 }
 
-export interface ReviewLog {
+export interface FsrsReview {
   id: number;
   itemId: number;
   grade: ReviewGrade;
@@ -444,4 +448,77 @@ export interface RetentionOverview {
   series: RetentionSeriesInfo[];
   /** Cada linha: { day, date, "<matéria|nicho>": percentual }. */
   rows: Array<Record<string, number | string>>;
+}
+
+export interface RetentionCurvePoint {
+  /** Dias a partir de hoje. */
+  x: number;
+  /** Retrievabilidade da memória, 0–100%. */
+  y: number;
+}
+
+export interface RetentionCurve {
+  points: RetentionCurvePoint[];
+  /** Primeiro dia em que R ≤ 90% (0 = já cruzou; null = nunca no horizonte). */
+  crossesAtDay: number | null;
+}
+
+/**
+ * Tick do livestream de retenção — uma amostra em tempo real por matéria,
+ * usada no card "Retenção · livestream" e no relatório consolidado de desempenho.
+ * `overdue` sinaliza que a matéria está atrasada (retenção caindo abaixo do
+ * piso — dispara o pisca vermelho e o alerta sonoro no demo).
+ */
+export interface RetentionLiveTick {
+  subjectId: number;
+  subjectName: string;
+  color: string;
+  accuracy: number;
+  retentionDelta: number;
+  overdue: boolean;
+  manyPartials: boolean;
+}
+
+export interface RetentionLiveStream {
+  generatedAt: string;
+  horizonMinutes: number;
+  ticks: RetentionLiveTick[];
+}
+
+/** Linha do relatório consolidado de desempenho por matéria. */
+export interface ConsolidatedPerformanceRow {
+  subjectId: number;
+  subjectName: string;
+  color: string;
+  rank: number;
+  accuracy: number;
+  questionsTotal: number;
+  questionsCorrect: number;
+  /** Retrievabilidade média dos itens de memória da matéria (0–100). */
+  retentionToday: number;
+  /** Dias até o primeiro item cruzar a janela ótima (negativo = atrasado). */
+  dueInDays: number;
+  overdueItems: number;
+  deepWorkBlocks: number;
+  partialBlocks: number;
+  hasManyPartials: boolean;
+  isOverdue: boolean;
+}
+
+export interface ConsolidatedPerformanceTotals {
+  questionsTotal: number;
+  questionsCorrect: number;
+  accuracy: number;
+  deepWorkBlocks: number;
+  partialBlocks: number;
+  overdueItems: number;
+  subjectsLate: number;
+}
+
+/** Relatório consolidado de desempenho — ranking com retenção e foco + totais. */
+export interface ConsolidatedPerformanceReport {
+  generatedAt: string;
+  horizonDays: number;
+  ranking: ConsolidatedPerformanceRow[];
+  totals: ConsolidatedPerformanceTotals;
 }

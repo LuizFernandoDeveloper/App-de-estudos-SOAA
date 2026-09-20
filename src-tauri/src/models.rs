@@ -164,6 +164,7 @@ pub struct Profile {
     pub exam_track: String,
     pub start_date: Option<String>,
     pub exam_date: Option<String>,
+    pub study_days: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +177,8 @@ pub struct ProfileInput {
     pub start_date: Option<String>,
     #[serde(default)]
     pub exam_date: Option<String>,
+    #[serde(default)]
+    pub study_days: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,9 +293,52 @@ pub struct SubjectAccuracyPoint {
     pub accuracy: f64,
 }
 
+/// Zona de foco derivada da taxa de conclusão (`completion_rate`) do bloco.
+/// Estratificação de risco: quanto menor a sustentação, maior a urgência ("Alta").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FocusZone {
+    /// completion_rate >= 1.0 → zona Baixa (💚): absorção plena, pouco risco.
+    Baixa,
+    /// 0.6 <= completion_rate < 1.0 → zona Média (💛): bloco parcial, reforçe o tópico.
+    Media,
+    /// completion_rate < 0.6 → zona Alta (❤): saída precoce; retome o tópico em breve.
+    Alta,
+}
+
+impl FocusZone {
+    pub fn from_completion_rate(completion_rate: f64) -> Self {
+        if completion_rate >= 1.0 {
+            Self::Baixa
+        } else if completion_rate >= 0.6 {
+            Self::Media
+        } else {
+            Self::Alta
+        }
+    }
+
+    /// Lê o valor texto gravado na coluna `zone` (`alta`/`media`/`baixa`).
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "alta" => Self::Alta,
+            "media" => Self::Media,
+            _ => Self::Baixa,
+        }
+    }
+
+    /// Forma textual persistida na coluna `zone`.
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Alta => "alta",
+            Self::Media => "media",
+            Self::Baixa => "baixa",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PomodoroSessionInput {
+pub struct FocusSessionInput {
     pub subject_id: i64,
     pub material_id: Option<i64>,
     pub goal_type: String,
@@ -309,7 +355,7 @@ pub struct PomodoroSessionInput {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PomodoroSession {
+pub struct FocusSession {
     pub id: i64,
     pub subject_id: i64,
     pub subject_name: String,
@@ -324,6 +370,8 @@ pub struct PomodoroSession {
     pub elapsed_minutes: i64,
     pub interrupts: i64,
     pub completion_rate: f64,
+    /// Zona de foco calculada pelo backend a partir do completion_rate.
+    pub zone: FocusZone,
     pub exit_reason: Option<String>,
     pub completed: bool,
     pub status: String,
@@ -533,9 +581,10 @@ pub struct MemoryItemInput {
     pub difficulty: f64,
 }
 
+/// Registro de uma avaliação de revisão espaçada (tabela `fsrs_reviews`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ReviewLog {
+pub struct FsrsReview {
     pub id: i64,
     pub item_id: i64,
     /// "again" | "hard" | "good" | "easy"
@@ -610,4 +659,97 @@ pub struct RetentionOverview {
     pub series: Vec<RetentionSeriesInfo>,
     /// Cada linha: { "day": 0..N, "date": "YYYY-MM-DD", "<key>": percentual }
     pub rows: Vec<serde_json::Value>,
+}
+
+/// Ponto da curva de retenção — coordenada pura para o Recharts: (dia, probabilidade %).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionCurvePoint {
+    /// Dia contado a partir da última revisão.
+    pub x: i64,
+    /// Probabilidade de lembrar (0–100).
+    pub y: f64,
+}
+
+/// Curva de retenção do motor FSRS regressa ao React apenas coordenadas + a flag
+/// do momento exato em que a retenção cruza a linha de 90%.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetentionCurve {
+    pub points: Vec<RetentionCurvePoint>,
+    /// Primeiro dia em que y <= 90 (None quando a retenção já está abaixo de 90% hoje
+    /// ou quando não há dados para projetar).
+    pub crosses_at_day: Option<i64>,
+}
+
+/// Tick do livestream de retenção — amostra em tempo real por matéria,
+/// usada no card "Retenção · livestream" do Painel de Desempenho.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformanceLiveTick {
+    pub subject_id: i64,
+    pub subject_name: String,
+    pub color: String,
+    /// Taxa de acerto no histórico de questões (0–100).
+    pub accuracy: f64,
+    /// Variação da retenção média nos próximos 3 dias (projeção FSRS).
+    pub retention_delta: f64,
+    /// Matéria atrasada: itens vencidos e retenção média abaixo do piso.
+    pub overdue: bool,
+    /// Tem muitos blocos parciais (>= 3) — aviso vermelho de foco fragmentado.
+    pub many_partials: bool,
+}
+
+/// Uma janela do livestream: instante em que foi gerado + amostras por matéria.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformanceLiveStream {
+    pub generated_at: String,
+    pub horizon_minutes: i64,
+    pub ticks: Vec<PerformanceLiveTick>,
+}
+
+/// Linha do relatório consolidado de desempenho por matéria.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsolidatedPerformanceRow {
+    pub subject_id: i64,
+    pub subject_name: String,
+    pub color: String,
+    pub rank: i64,
+    pub accuracy: f64,
+    pub questions_total: i64,
+    pub questions_correct: i64,
+    /// Retrievabilidade média dos itens de memória da matéria (0–100).
+    pub retention_today: f64,
+    /// Dias até o primeiro item cruzar a janela ótima (negativo = atrasado).
+    pub due_in_days: i64,
+    pub overdue_items: i64,
+    pub deep_work_blocks: i64,
+    pub partial_blocks: i64,
+    pub has_many_partials: bool,
+    pub is_overdue: bool,
+}
+
+/// Totais agregados do relatório consolidado de desempenho.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsolidatedPerformanceTotals {
+    pub questions_total: i64,
+    pub questions_correct: i64,
+    pub accuracy: f64,
+    pub deep_work_blocks: i64,
+    pub partial_blocks: i64,
+    pub overdue_items: i64,
+    pub subjects_late: i64,
+}
+
+/// Relatório consolidado de desempenho — ranking com retenção e foco + totais.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsolidatedPerformanceReport {
+    pub generated_at: String,
+    pub horizon_days: i64,
+    pub ranking: Vec<ConsolidatedPerformanceRow>,
+    pub totals: ConsolidatedPerformanceTotals,
 }

@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="500" viewBox="0 0 760 500" font-family="Segoe UI, sans-serif">
+  <defs>
+    <linearGradient id="pg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111f31"/>
+      <stop offset="1" stop-color="#0c1828"/>
+    </linearGradient>
+    <linearGradient id="timerG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#28205e"/>
+      <stop offset="1" stop-color="#102239"/>
+    </linearGradient>
+    <linearGradient id="barW" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7f73e7"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="760" height="500" fill="#08111f"/>
+  <ellipse cx="120" cy="500" rx="300" ry="180" fill="#16243a"/>
+
+  <g transform="translate(24 24)">
+    <rect width="712" height="64" rx="15" fill="url(#timerG)" stroke="#3d4690"/>
+    <text x="26" y="29" font-size="14" font-weight="700" fill="#eff6ff">Foco · deep work timebox</text>
+    <text x="26" y="48" font-size="11" fill="#93a5bd">escalonamento atencional por Zona · registra toda sessão</text>
+    <g font-size="11">
+      <rect x="478" y="-26" width="108" height="24" rx="12" fill="#123a2d3d" stroke="#2f7a5d66"/>
+      <text x="490" y="-11" font-weight="700" fill="#a7f3d0">meta: exercícios</text>
+      <rect x="596" y="-26" width="104" height="24" rx="12" fill="#0d1b2d" stroke="#213148"/>
+      <text x="608" y="-11" fill="#dbe6f4">modo demo</text>
+    </g>
+  </g>
+
+  <!-- timer card -->
+  <g transform="translate(24 108)">
+    <rect width="330" height="356" rx="15" fill="url(#pg)" stroke="#213148"/>
+    <text x="22" y="30" font-size="12" font-weight="700" fill="#d7e2f0">Bloco em andamento</text>
+
+    <circle cx="165" cy="130" r="72" fill="#0b1624" stroke="#2b3d54" stroke-width="6"/>
+    <circle cx="165" cy="130" r="72" fill="none" stroke="url(#barW)" stroke-width="6" stroke-dasharray="340 452" stroke-linecap="round" transform="rotate(-90 165 130)"/>
+    <text x="165" y="124" text-anchor="middle" font-size="34" font-weight="800" fill="#eff6ff">24:12</text>
+    <text x="165" y="146" text-anchor="middle" font-size="11" fill="#93a5bd">de 50 min planejados</text>
+    <text x="165" y="224" text-anchor="middle" font-size="11" fill="#dbe6f4">Resolver 12 exercícios de dinâmica</text>
+    <text x="165" y="242" text-anchor="middle" font-size="10.5" fill="#8195ad">Física · Dinâmica (Leis de Newton)</text>
+
+    <g transform="translate(22 258)" font-size="11">
+      <rect x="0" y="0" width="146" height="36" rx="10" fill="#7663f324" stroke="#7663f33e"/>
+      <text x="22" y="23" font-weight="700" fill="#d3ceff">❚❚ Pausar</text>
+      <rect x="156" y="0" width="146" height="36" rx="10" fill="#0d1b2d" stroke="#213148"/>
+      <text x="22" y="23" fill="#dbe6f4">Saída precoce</text>
+      <rect x="0" y="46" width="146" height="36" rx="10" fill="#0d1b2d" stroke="#213148"/>
+      <text x="18" y="69" fill="#ff9cae">Interrupção involuntária (1)</text>
+      <rect x="156" y="46" width="146" height="36" rx="10" fill="#123a2d3d" stroke="#2f8f6a59"/>
+      <text x="24" y="69" font-weight="700" fill="#a7f3d0">Fechar bloco</text>
+    </g>
+  </g>
+
+  <!-- sessions table -->
+  <g transform="translate(374 108)">
+    <rect width="362" height="356" rx="15" fill="url(#pg)" stroke="#213148"/>
+    <text x="22" y="30" font-size="12" font-weight="700" fill="#d7e2f0">Sessões registradas</text>
+    <g font-size="12" fill="#8195ad" font-weight="700">
+      <text x="22" y="58">matéria</text>
+      <text x="194" y="58">zona</text>
+      <text x="250" y="58">concl.</text>
+    </g>
+    <line x1="20" y1="68" x2="342" y2="68" stroke="#16263b"/>
+
+    <g transform="translate(0 78)" font-size="11">
+      <circle cx="28" cy="4" r="5" fill="#7f73e7"/>
+      <text x="40" y="8" fill="#dbe6f4">Matemática · Geom. Plana</text>
+      <rect x="186" y="-8" width="58" height="20" rx="10" fill="#123a2d3d" stroke="#2f7a5d66"/>
+      <circle cx="195" cy="2" r="4" fill="#34d399"/>
+      <text x="203" y="6" font-weight="800" fill="#a7f3d0">baixa</text>
+      <text x="262" y="6" font-weight="700" fill="#55e6aa">100%</text>
+      <rect x="186" y="18" width="140" height="5" rx="2.5" fill="#22334a"/>
+      <rect x="186" y="18" width="140" height="5" rx="2.5" fill="#55e6aa"/>
+      <text x="20" y="42" fill="#8195ad">60 min · 0 interrupções</text>
+    </g>
+
+    <g transform="translate(0 134)" font-size="11">
+      <circle cx="28" cy="4" r="5" fill="#22d3ee"/>
+      <text x="40" y="8" fill="#dbe6f4">Inglês · Grammar and Usage</text>
+      <rect x="186" y="-8" width="58" height="20" rx="10" fill="#123a2d3d" stroke="#2f7a5d66"/>
+      <circle cx="195" cy="2" r="4" fill="#34d399"/>
+      <text x="203" y="6" font-weight="800" fill="#a7f3d0">baixa</text>
+      <text x="262" y="6" font-weight="700" fill="#55e6aa">100%</text>
+      <rect x="186" y="18" width="140" height="5" rx="2.5" fill="#22334a"/>
+      <rect x="186" y="18" width="132" height="5" rx="2.5" fill="#55e6aa"/>
+      <text x="20" y="42" fill="#8195ad">30 min · 0 interrupções</text>
+    </g>
+
+    <g transform="translate(0 190)" font-size="11">
+      <circle cx="28" cy="4" r="5" fill="#ffca76"/>
+      <text x="40" y="8" fill="#dbe6f4">Física · Dinâmica</text>
+      <rect x="186" y="-8" width="62" height="20" rx="10" fill="#563c1d3d" stroke="#86693c66"/>
+      <circle cx="196" cy="2" r="4" fill="#ffca76"/>
+      <text x="205" y="6" font-weight="800" fill="#ffe6a3">média</text>
+      <text x="262" y="6" font-weight="700" fill="#ffca76">75%</text>
+      <rect x="186" y="18" width="140" height="5" rx="2.5" fill="#22334a"/>
+      <rect x="186" y="18" width="105" height="5" rx="2.5" fill="#ffca76"/>
+      <text x="20" y="42" fill="#8195ad">45 min · 2 interrupções</text>
+    </g>
+
+    <g transform="translate(0 246)" font-size="11">
+      <circle cx="28" cy="4" r="5" fill="#ff5a71"/>
+      <text x="40" y="8" fill="#dbe6f4">Química · Orgânica</text>
+      <rect x="186" y="-8" width="56" height="20" rx="10" fill="#5e223044" stroke="#a040525c"/>
+      <circle cx="194" cy="2" r="4" fill="#ff5a71"/>
+      <text x="203" y="6" font-weight="800" fill="#ffb9c4">alta</text>
+      <text x="262" y="6" font-weight="700" fill="#ffca76">50%</text>
+      <rect x="186" y="18" width="140" height="5" rx="2.5" fill="#22334a"/>
+      <rect x="186" y="18" width="70" height="5" rx="2.5" fill="#ff5a71"/>
+      <text x="20" y="42" fill="#8195ad">40 min · 3 interrupções</text>
+    </g>
+
+    <line x1="20" y1="304" x2="342" y2="304" stroke="#16263b"/>
+    <text x="20" y="326" font-size="10.5" fill="#8195ad">Sessões parciais alimentam o buffer de reagendamento automático.</text>
+  </g>
+</svg>
