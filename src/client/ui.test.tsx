@@ -221,6 +221,32 @@ describe("RankingView (demo) · lista, zonas e alocação de reforço", () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
+
+  it("agrupa as linhas por zona — vermelha no topo, depois amarela e verde", async () => {
+    const zoneIndex = (score: number) => (score >= 7 ? 0 : score >= 5 ? 1 : 2);
+    const zoneName = (score: number) => (score >= 7 ? "red" : score >= 5 ? "amber" : "green");
+    const expected = [...demoRanking]
+      .sort((a, b) => {
+        const diff = zoneIndex(a.priorityScore) - zoneIndex(b.priorityScore);
+        if (diff !== 0) return diff;
+        return b.priorityScore - a.priorityScore || a.name.localeCompare(b.name);
+      })
+      .map((row) => zoneName(row.priorityScore));
+    expect(new Set(expected)).toEqual(new Set(["red", "amber", "green"]));
+
+    const { container } = render(
+      <RankingView ranking={demoRanking} allocations={demoDayAllocations} onChanged={vi.fn(async () => undefined)} demo />
+    );
+    const rows = Array.from(container.querySelectorAll<HTMLElement>(".table-wrap tbody tr"));
+    const zones = rows.map((row) => (row.className.match(/zone-row\s+(red|amber|green)/) ?? [])[1]);
+    const kinds = zones.map((zone) => ({ red: 0, amber: 1, green: 2 })[zone as "red" | "amber" | "green"]);
+
+    expect(zones).toEqual(expected);
+    expect(kinds).toEqual([...kinds].sort((a, b) => a - b));
+    const ranks = rows.map((row) => row.querySelector(".rank-position")?.textContent);
+    expect(ranks[0]).toBe("1");
+    expect(new Set(ranks).size).toBe(rows.length);
+  });
 });
 
 describe("FocusTimerView (demo) · sessões, capturas e fluxo completo de timebox", () => {

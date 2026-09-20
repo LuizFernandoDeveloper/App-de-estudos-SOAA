@@ -6,15 +6,39 @@
 
 **Aplicativo desktop, offline e local-first para planejar, executar e reter o autodidatismo.**
 
+[Visão geral](#-sobre) ·
+[Funcionalidades](#-funcionalidades) ·
+[Fluxos sugeridos](#-fluxos-sugeridos-suggested-workflows) ·
+[Como rodar](#-como-rodar) ·
+[Como funciona](#-como-funciona) ·
+[Testes e qualidade](#-testes-e-qualidade) ·
+[FAQ](#-faq) ·
+[Licença](#-licença)
+
 ![versão](https://img.shields.io/badge/vers%C3%A3o-0.1.0-8b5cf6?style=flat-square)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square)
 ![React](https://img.shields.io/badge/React-19-61dafb?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square)
 ![Rust](https://img.shields.io/badge/Rust-stable-e5732f?style=flat-square)
-![tests](https://img.shields.io/badge/tests-74%20passando-55e6aa?style=flat-square)
+![local-first](https://img.shields.io/badge/local--first-100%25%20offline-0ea5e9?style=flat-square)
+![tests](https://img.shields.io/badge/tests-75%20passando-55e6aa?style=flat-square)
 ![coverage](https://img.shields.io/badge/coverage-threshold%20100%25-34d399?style=flat-square)
+![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-ff5a71?style=flat-square)
 
 </div>
+
+---
+
+## 📚 O que você vai encontrar
+
+| Área | Entrega |
+|---|---|
+| **Planejamento** | Matriz de priorização por peso estratégico (IP) e rota de prova por vestibular |
+| **Execução** | Foco (deep work) com timebox, pausas, interrupções e histórico |
+| **Priorização** | Ranking ao vivo em **Zonas 1/2/3**, com lista agrupada por zona |
+| **Memória** | Estudo espaçado (FSRS): curva de decaimento e revisão no ponto dos 90% |
+| **Recuperação** | Buffer de reagendamento que devolve saldo devedor sem efeito dominó |
+| **Dados** | Persistentes em SQLite local — migrações e WAL inclusos |
 
 ---
 
@@ -23,6 +47,7 @@
 - [Sobre](#-sobre)
 - [Funcionalidades](#-funcionalidades)
 - [Interface do aplicativo](#%EF%B8%8F-interface-do-aplicativo)
+- [Fluxos sugeridos (Suggested workflows)](#-fluxos-sugeridos-suggested-workflows)
 - [Como rodar](#-como-rodar)
 - [Como funciona](#-como-funciona)
   - [Retenção e memória (SRS/FSRS)](#-retenção-e-memória-srsfsrs)
@@ -35,6 +60,8 @@
 - [Privacidade](#-privacidade)
 - [Roadmap](#-roadmap)
 - [Contribuindo](#-contribuindo)
+- [Referências](#-referências)
+- [Licença](#-licença)
 
 ---
 
@@ -72,11 +99,15 @@ a todo o planejamento.
 **Zonas de prioridade** — o score de cada matéria combina **peso estratégico (IP)**,
 **déficit contra a meta**, **ritmo recente** e **tendência de 7 dias**:
 
-| Zona | Leitura |
-|---|---|
-| 🔴 Zona 1 | merece atenção **hoje** |
-| 🟡 Zona 2 | mantenha o ritmo |
-| 🟢 Zona 3 | siga o plano normal |
+| Zona | Score | Leitura |
+|---|---|---|
+| 🔴 Zona 1 | ≥ 7,0 | merece atenção **hoje** |
+| 🟡 Zona 2 | 5,0 – 6,9 | mantenha o ritmo |
+| 🟢 Zona 3 | < 5,0 | siga o plano normal |
+
+> 🧭 **Leitura executiva:** a lista do ranking é apresentada **agrupada por zona** —
+> vermelhas no topo, depois amarelas e, por fim, verdes — com a maior prioridade no
+> topo de cada zona, para você ver de cara *o que está no vermelho*.
 
 ![Ranking](assets/ranking.svg)
 
@@ -137,7 +168,9 @@ revisões de itens de memória e o card *livestream de retenção*.
 e *Salvar metas*.
 
 **Ranking de prioridade** — a leitura executiva: posições com movimento
-(⬆/⬇/novo), zonas coloridas e alocação de reforço, com dicas de retomada.
+(⬆/⬇/novo), zonas coloridas e alocação de reforço, com dicas de retomada. A
+lista é **agrupada por zona** — primeiro as vermelhas, depois amarelas e, por
+fim, verdes — com a maior prioridade no topo de cada zona.
 
 **Biblioteca** — materiais com categoria, status, páginas e a estratégia
 recomendada (banco cronológico, ficha de síntese, Feynman, resolução ativa,
@@ -146,6 +179,42 @@ flashcards).
 > **Loop de uso sugerido:** `Planejar → Priorizar → Focar → Medir → Revisar`.
 > O ranking diz *o que* atacar hoje; o buffer devolve o saldo devedor para os
 > slots protegidos da semana.
+
+---
+
+## 🔁 Fluxos sugeridos (Suggested workflows)
+
+O app vira um sistema quando você repete um mesmo fluxo todos os dias. As rotinas
+abaixo são os caminhos mais usados — do ritual diário de 15 minutos ao modo mais
+urgente de um exame iminente.
+
+```mermaid
+flowchart TD
+    A["Planejar<br/>rota de prova + pesos"] --> B["Priorizar<br/><b>score ao vivo</b>"]
+    B --> C{"zona?"}
+    C -->|"≥ 7,0 · vermelha"| D["Focar ·<br/>atacar hoje"]
+    C -->|"5,0–6,9 · amarela"| E["Focar ·<br/>manter ritmo"]
+    C -->|"< 5,0 · verde"| F["Focar ·<br/>plano normal"]
+    D --> G["Medir<br/>acerto, tempo, buffer"]
+    E --> G
+    F --> G
+    G --> H{"retenção<br/>R < 90%?"}
+    H -->|"sim"| I["Revisar<br/>FSRS eleva a Stability"]
+    H -->|"não — reter ok"| B
+    I -->|"próximo bloco"| B
+```
+
+| Workflow | Quando usar | Caminho no app | Resultado |
+|---|---|---|---|
+| **Ritual diário (15 min)** | Todos os dias, no mesmo horário | `Visão geral` → `Ranking` → `Foco` | O dia começa sabendo o *que* atacar e com a primeira sessão agendada |
+| **Fim de tarde com pouco tempo** | Só sobrou 40 minutos | `Ranking` → linha vermelha → *Alocar reforço* ou foco curto | Prioridade atacada mesmo em slot pequeno |
+| **Revisão espaçada** | Matéria caiu abaixo de 90% de retenção | `Desempenho` → *Decaimento* → revisar o nicho na curva | Stability volta a subir e a matéria sai da Zona 1 |
+| **Prova em 30 dias** | Exame definido e pouco tempo | `Biblioteca` → *Rota de prova* → ajustar pesos na `Matriz` | Plano reverso priorizando as provas de maior peso |
+| **Sessão cortada de propósito** | Fadiga ou interrupção involuntária | `Foco` → *saída precoce* com motivo | Saldo devedor cai no buffer e é reagendado sozinho |
+| **Modo demonstração** | Conhecer o app antes de inserir nada | *Configurações* → *Modo demonstração* | Dados sintéticos, nada é gravado |
+
+> 💡 **Regra de ouro:** o ranking prioriza por *zonas*; o foco executa um bloco por
+> vez; o buffer repara o que faltou; a retenção fecha o ciclo medindo a memória.
 
 ---
 
@@ -233,12 +302,19 @@ sem nenhuma chamada ao backend.
 ## ✅ Testes e qualidade
 
 - **Backend (Rust):** FSRS, retenção, scheduler e demo — `npm test`.
-- **Frontend (React):** **74 testes** com Vitest + Testing Library cobrindo o
-  fluxo completo de cada tela (matriz, rota, foco, retenção, triage…).
+- **Frontend (React):** **75 testes** com Vitest + Testing Library cobrindo o
+  fluxo completo de cada tela (matriz, rota, foco, retenção, triage, ranking…).
 - **Cobertura:** o `vitest.config.ts` exige **100%** em *statements*, *lines*,
   *functions* e *branches* — o pipeline falha antes do merge com linha nova
   sem teste.
 - **Tipagem:** TypeScript em modo *strict*.
+
+| Gate | Comando | Falha quando |
+|---|---|---|
+| TypeScript (strict) | `npx tsc --noEmit` | existe qualquer erro de tipo |
+| Testes de unidade | `npm run test:web` | algum teste regressa |
+| Cobertura | `npx vitest run --coverage` | fica abaixo de 100% em qualquer métrica |
+| Backend Rust | `npm test` | FSRS/scheduler/retenção regridem |
 
 > 🔒 *Quality gate:* `tsc --noEmit` limpo + `vitest --coverage` (thresholds 100%) + `cargo test` verde.
 
@@ -347,6 +423,26 @@ cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 3. Abra um *pull request* descrevendo o que mudou e por quê.
+
+---
+
+## 📚 Referências
+
+| Tema | Link |
+|---|---|
+| Shell desktop | [Tauri 2](https://tauri.app) |
+| Estudo espaçado | [Free Spaced Repetition Scheduler (FSRS)](https://github.com/open-spaced-repetition/fsrs4anki) |
+| Curva de retenção | [Ebbinghaus · curva do esquecimento](https://en.wikipedia.org/wiki/Forgetting_curve) |
+| Gráficos | [Recharts](https://recharts.org) |
+| Validação | [Zod](https://zod.dev) |
+| Testes front | [Vitest](https://vitest.dev) · [Testing Library](https://testing-library.com) |
+| Persistência | [rusqlite](https://github.com/rusqlite/rusqlite) · [SQLite WAL](https://www.sqlite.org/wal.html) |
+
+---
+
+## 📜 Licença
+
+Distribuído sob a licença **MIT** — veja [LICENSE](LICENSE).
 
 ---
 

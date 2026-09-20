@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -32,13 +32,24 @@ const ZONES = [
 ] as const;
 type ZoneId = (typeof ZONES)[number]["id"];
 const zoneOf = (score: number): ZoneId => (score >= 7 ? "red" : score >= 5 ? "amber" : "green");
+const zoneIndex = (score: number) => (score >= 7 ? 0 : score >= 5 ? 1 : 2);
 const ZONE_LABEL: Record<ZoneId, string> = { red: "Vermelha", amber: "Amarela", green: "Verde" };
 
 export function RankingView({ ranking, allocations, onChanged, demo }: { ranking: SubjectRanking[]; allocations: DayAllocation[]; onChanged: () => Promise<void>; demo: boolean }) {
   const [managing, setManaging] = useState<SubjectRanking | null>(null);
-  const top = ranking[0];
-  const fallen = ranking.filter((row) => row.movement === "down");
-  const risen = ranking.filter((row) => row.movement === "up");
+  const display = useMemo(
+    () => [...ranking]
+      .sort((a, b) => {
+        const zoneDiff = zoneIndex(a.priorityScore) - zoneIndex(b.priorityScore);
+        if (zoneDiff !== 0) return zoneDiff;
+        return b.priorityScore - a.priorityScore || a.name.localeCompare(b.name);
+      })
+      .map((row, index) => ({ ...row, rank: index + 1 })),
+    [ranking]
+  );
+  const top = display[0];
+  const fallen = display.filter((row) => row.movement === "down");
+  const risen = display.filter((row) => row.movement === "up");
   const bySubject = new Map(allocations.map((a) => [a.subjectId, a]));
   return <div className="page-stack">
     <section className="card ranking-hero"><div><p className="eyebrow">Prioridade calculada ao vivo</p><h2>Qual matéria merece atenção hoje?</h2><p>O score combina peso estratégico (IP), déficit contra sua meta de acerto, ritmo recente de questões e a tendência dos últimos 7 dias. A setinha mostra se a matéria <strong className="up-text">subiu</strong> ou <strong className="down-text">caiu</strong> em relação à janela anterior. Clique em <strong>Gerenciar</strong> para alocar a matéria a um dia da semana (reforço).</p></div><Crown size={30} /></section>
@@ -50,7 +61,7 @@ export function RankingView({ ranking, allocations, onChanged, demo }: { ranking
     <section className="card table-card">
       {ranking.length ? <div className="section-heading"><div><p className="eyebrow">Ordem de ataque</p><h2>Ranking de prioridade</h2></div></div> : null}
       {ranking.length ? <div className="zone-legend">{ZONES.map((zone) => <span key={zone.id} className={`zone-chip ${zone.id}`}><i />{zone.label}<em>{zone.hint}</em></span>)}</div> : null}
-      {ranking.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Matéria</th><th>Movimento</th><th>Zona</th><th>Prioridade</th><th>Acerto</th><th>Reforço</th><th></th></tr></thead><tbody>{ranking.map((row) => {
+      {ranking.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Matéria</th><th>Movimento</th><th>Zona</th><th>Prioridade</th><th>Acerto</th><th>Reforço</th><th></th></tr></thead><tbody>{display.map((row) => {
         const zone = zoneOf(row.priorityScore);
         const allocation = bySubject.get(row.id);
         return <tr key={row.id} className={`zone-row ${zone}`}><td><span className="rank-position">{row.rank}</span></td><td><span className="subject-cell"><span className="color-dot" style={{ background: colorOf(row.color) }} />{row.name}</span></td><td><MovementBadge movement={row.movement} /></td><td><span className={`zone-pill ${zone}`} title={ZONE_LABEL[zone]}><i />{ZONE_LABEL[zone]}</span></td><td><div className="priority-cell"><strong>{row.priorityScore}</strong><div className="progress-inline"><span style={{ width: `${Math.min(100, row.priorityScore / 9 * 100)}%`, background: row.priorityScore >= 7 ? "#ff5a71" : row.priorityScore >= 5 ? "#ffca76" : "#34d399" }} /></div></div></td><td><strong className={row.accuracy >= row.goalAccuracy ? "good" : "needs-work"}>{row.accuracy}%</strong></td><td>{allocation ? <button className="alloc-badge" title={allocation.note ?? ""} onClick={() => setManaging(row)}><CalendarCheck size={13} /> {DAYS[allocation.weekday]} · {minutes(allocation.minutes)}</button> : <span className="muted-text">—</span>}</td><td><button className="icon-button" title="Alocar reforço ou gerenciar" onClick={() => setManaging(row)}><Pencil size={15} /></button></td></tr>;

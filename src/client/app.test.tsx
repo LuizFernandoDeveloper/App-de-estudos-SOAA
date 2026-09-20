@@ -676,7 +676,12 @@ describe("Ranking · backend real", () => {
     await screen.findByRole("heading", { level: 2, name: /Ranking de prioridade|Prioridade/ });
 
     const subject = store.subjects[0];
-    fireEvent.click(screen.getAllByTitle("Alocar reforço ou gerenciar")[0]);
+    const manageButtonFor = (name: string) => {
+      const rows = Array.from(document.querySelectorAll<HTMLElement>(".table-wrap tbody tr"));
+      const row = rows.find((entry) => entry.textContent?.includes(name)) ?? rows[0];
+      return row.querySelector<HTMLButtonElement>('button[title="Alocar reforço ou gerenciar"]')!;
+    };
+    fireEvent.click(manageButtonFor(subject.name));
     const panel = await screen.findByRole("dialog", { name: "Gerenciar reforço" });
     expect(within(panel).getByRole("heading", { level: 2, name: /Reforço ·/ })).toBeInTheDocument();
 
@@ -686,7 +691,7 @@ describe("Ranking · backend real", () => {
     fireEvent.click(within(panel).getByRole("button", { name: /Salvar reforço/ }));
     await waitFor(() => expect(invokeStub).toHaveBeenCalledWith("save_day_allocation", expect.objectContaining({ input: expect.objectContaining({ subjectId: subject.id }) })));
 
-    fireEvent.click(screen.getAllByTitle("Alocar reforço ou gerenciar")[0]);
+    fireEvent.click(manageButtonFor(subject.name));
     const panelAgain = await screen.findByRole("dialog", { name: "Gerenciar reforço" });
     fireEvent.click(within(panelAgain).getByRole("button", { name: /Remover alocação/ }));
     await waitFor(() => expect(invokeStub).toHaveBeenCalledWith("delete_day_allocation", expect.objectContaining({ subjectId: subject.id })));
