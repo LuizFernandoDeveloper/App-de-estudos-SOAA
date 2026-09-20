@@ -7,6 +7,7 @@ export interface CatalogSubject {
   group: CatalogGroup;
   weight: number;
   difficulty: number;
+  books?: string[];
 }
 
 export const CATALOG_COLORS = ["indigo", "violet", "cyan", "pink", "amber", "emerald", "orange", "blue"];
@@ -46,11 +47,106 @@ export const CATALOG_GROUP_HINTS: Record<CatalogGroup, string> = {
   tecnico: "Disciplinas de cursos técnicos: elétrica, desenho, automação, mecânica e gestão."
 };
 
+export type FocusAreaId = "exatas" | "biologicas" | "humanas" | "ti" | "linguagens";
+
+export interface FocusArea {
+  id: FocusAreaId;
+  label: string;
+  hint: string;
+  multiplier: number;
+  parents: string[];
+}
+
+/** Área que você quer entrar: cada botão de ênfase eleva o peso padrão dos grupos que sustentam aquela carreira. */
+export const FOCUS_AREAS: FocusArea[] = [
+  {
+    id: "exatas",
+    label: "Exatas · Engenharias",
+    hint: "Engenharia, ITA/IME e militares: Matemática, Física e Química com foco maior.",
+    multiplier: 1.3,
+    parents: ["Matemática", "Matemática ENEM", "Física", "Física ENEM", "Química", "Química ENEM", "Faculdade"]
+  },
+  {
+    id: "biologicas",
+    label: "Biológicas · Saúde",
+    hint: "Medicina e áreas da saúde: Biologia e Química em primeiro plano.",
+    multiplier: 1.3,
+    parents: ["Biologia", "Química", "Química ENEM", "Matemática ENEM"]
+  },
+  {
+    id: "humanas",
+    label: "Humanas · Direito e Sociais",
+    hint: "Direito e Ciências Sociais: leitura, atualidades e redação com peso maior.",
+    multiplier: 1.3,
+    parents: ["História", "Geografia", "Humanas", "Português", "Redação", "Literatura", "Inglês", "Espanhol"]
+  },
+  {
+    id: "ti",
+    label: "TI · Computação",
+    hint: "Computação: Matemática, algoritmos, programação e banco de dados em primeiro plano.",
+    multiplier: 1.25,
+    parents: ["Matemática", "Matemática ENEM", "Faculdade", "Técnico"]
+  },
+  {
+    id: "linguagens",
+    label: "Linguagens · Comunicação",
+    hint: "Redação, idiomas, literatura e interpretação recebem o reforço principal.",
+    multiplier: 1.25,
+    parents: ["Português", "Redação", "Literatura", "Inglês", "Espanhol", "Arte", "Educação Física"]
+  }
+];
+
+export const FOCUS_AREA_LABELS: Record<FocusAreaId, string> = Object.fromEntries(
+  FOCUS_AREAS.map((area) => [area.id, area.label])
+) as Record<FocusAreaId, string>;
+
+/** Matéria-mãe de um item do catálogo ("Física · Cinemática" → "Física"). */
+export const parentArea = (name: string) => {
+  const marker = name.indexOf(" · ");
+  return marker === -1 ? name : name.slice(0, marker);
+};
+
+export const emphasize = (area: FocusArea | null, entry: Pick<CatalogSubject, "name">): boolean =>
+  area !== null && area.parents.some((parent) => {
+    if (entry.name === parent) return true;
+    const marker = `${parent} · `;
+    return entry.name.startsWith(marker);
+  });
+
+/** Peso com a ênfase da área aplicada (arredondado e limitado a 1..5). */
+export const areaWeight = (area: FocusArea | null, entry: CatalogSubject): number => {
+  if (!area || !emphasize(area, entry)) return entry.weight;
+  const boosted = Math.round(entry.weight * area.multiplier);
+  return Math.max(1, Math.min(5, boosted));
+};
+
+export const booksForName = (name: string): string[] | undefined =>
+  catalogSubjects.find((entry) => entry.name === name)?.books;
+
+/**
+ * Reordena itens de forma que as sub-áreas de uma mesma matéria-mãe venham
+ * uma após a outra (ex.: Cinemática → Dinâmica → Energia → …), mantendo as
+ * matérias de maior escore (risco/computedIp) no bloco inicial da rota.
+ */
+export function sequenceByParent<T extends { name: string }>(items: T[], score?: (item: T) => number): T[] {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = parentArea(item.name);
+    const bucket = groups.get(key) ?? [];
+    bucket.push(item);
+    groups.set(key, bucket);
+  }
+  return [...groups.entries()]
+    .map(([name, bucket]) => ({ name, bucket, peak: Math.max(0, ...bucket.map((item) => score?.(item) ?? 0)) }))
+    .sort((a, b) => b.peak - a.peak || a.name.localeCompare(b.name))
+    .flatMap((group) => group.bucket);
+}
+
 export const catalogSubjects: CatalogSubject[] = [
   /* ITA / IME — exatas de vestibulares militares */
   { name: "Matemática · Aritmética e Teoria dos Números", group: "ita-ime", weight: 4, difficulty: 5 },
-  { name: "Matemática · Álgebra Fundamental", group: "ita-ime", weight: 4, difficulty: 4 },
-  { name: "Matemática · Funções e Gráficos", group: "ita-ime", weight: 5, difficulty: 5 },
+  { name: "Matemática · Álgebra Fundamental", group: "ita-ime", weight: 4, difficulty: 4, books: ["FME — Fundamentos de Matemática Elementar 1-3 (Iezzi)", "Noções de Matemática (Aref)"] },
+  { name: "Matemática · Funções e Gráficos", group: "ita-ime", weight: 5, difficulty: 5, books: ["FME 8 — Funções (Iezzi)", "Noções de Matemática · Vol. 1 (Aref)"] },
   { name: "Matemática · Trigonometria", group: "ita-ime", weight: 5, difficulty: 4 },
   { name: "Matemática · Sequências e Progressões", group: "ita-ime", weight: 3, difficulty: 3 },
   { name: "Matemática · Análise Combinatória", group: "ita-ime", weight: 4, difficulty: 4 },
@@ -58,34 +154,34 @@ export const catalogSubjects: CatalogSubject[] = [
   { name: "Matemática · Matrizes e Determinantes", group: "ita-ime", weight: 4, difficulty: 4 },
   { name: "Matemática · Polinômios e Equações Algébricas", group: "ita-ime", weight: 4, difficulty: 4 },
   { name: "Matemática · Números Complexos", group: "ita-ime", weight: 4, difficulty: 4 },
-  { name: "Matemática · Geometria Plana", group: "ita-ime", weight: 5, difficulty: 5 },
-  { name: "Matemática · Geometria Espacial", group: "ita-ime", weight: 5, difficulty: 5 },
-  { name: "Matemática · Geometria Analítica", group: "ita-ime", weight: 5, difficulty: 5 },
-  { name: "Matemática · Cálculo (Limites e Derivadas)", group: "ita-ime", weight: 5, difficulty: 5 },
-  { name: "Matemática · Cálculo Integral", group: "ita-ime", weight: 4, difficulty: 5 },
-  { name: "Física · Cinemática", group: "ita-ime", weight: 5, difficulty: 5 },
-  { name: "Física · Dinâmica (Leis de Newton)", group: "ita-ime", weight: 5, difficulty: 5 },
+  { name: "Matemática · Geometria Plana", group: "ita-ime", weight: 5, difficulty: 5, books: ["FME 9 — Geometria Plana (Iezzi)"] },
+  { name: "Matemática · Geometria Espacial", group: "ita-ime", weight: 5, difficulty: 5, books: ["FME 10 — Geometria Espacial (Iezzi)"] },
+  { name: "Matemática · Geometria Analítica", group: "ita-ime", weight: 5, difficulty: 5, books: ["FME 7 — Geometria Analítica (Iezzi)", "Geometria Analítica (Prof. J. L. Lima)"] },
+  { name: "Matemática · Cálculo (Limites e Derivadas)", group: "ita-ime", weight: 5, difficulty: 5, books: ["Cálculo Vol. 1 (Guidorizzi)", "Cálculo (Stewart)"] },
+  { name: "Matemática · Cálculo Integral", group: "ita-ime", weight: 4, difficulty: 5, books: ["Cálculo Vol. 1 e 2 (Guidorizzi)"] },
+  { name: "Física · Cinemática", group: "ita-ime", weight: 5, difficulty: 5, books: ["Tópicos de Física Vol. 1 (Newton, Helou, Gualter)", "Fundamentos da Física Vol. 1 (Ramalho)"] },
+  { name: "Física · Dinâmica (Leis de Newton)", group: "ita-ime", weight: 5, difficulty: 5, books: ["Tópicos de Física Vol. 1", "Física Clássica (Calçada & Sampaio)"] },
   { name: "Física · Trabalho e Energia", group: "ita-ime", weight: 5, difficulty: 5 },
   { name: "Física · Gravitação", group: "ita-ime", weight: 3, difficulty: 4 },
   { name: "Física · Estática", group: "ita-ime", weight: 4, difficulty: 5 },
   { name: "Física · Hidrostática", group: "ita-ime", weight: 4, difficulty: 4 },
   { name: "Física · Termologia e Dilatação", group: "ita-ime", weight: 3, difficulty: 3 },
-  { name: "Física · Termodinâmica", group: "ita-ime", weight: 5, difficulty: 5 },
+  { name: "Física · Termodinâmica", group: "ita-ime", weight: 5, difficulty: 5, books: ["Tópicos de Física Vol. 2"] },
   { name: "Física · Ondas e Acústica", group: "ita-ime", weight: 4, difficulty: 4 },
   { name: "Física · Óptica Geométrica", group: "ita-ime", weight: 4, difficulty: 4 },
   { name: "Física · Eletrostática", group: "ita-ime", weight: 5, difficulty: 5 },
   { name: "Física · Eletrodinâmica", group: "ita-ime", weight: 5, difficulty: 5 },
-  { name: "Física · Eletromagnetismo", group: "ita-ime", weight: 5, difficulty: 5 },
+  { name: "Física · Eletromagnetismo", group: "ita-ime", weight: 5, difficulty: 5, books: ["Tópicos de Física Vol. 3", "Física III (Sears & Zemansky)"] },
   { name: "Física · Física Moderna", group: "ita-ime", weight: 4, difficulty: 5 },
   { name: "Química · Atomística e Modelos Atômicos", group: "ita-ime", weight: 4, difficulty: 3 },
   { name: "Química · Ligações Químicas", group: "ita-ime", weight: 4, difficulty: 3 },
-  { name: "Química · Estequiometria", group: "ita-ime", weight: 5, difficulty: 5 },
+  { name: "Química · Estequiometria", group: "ita-ime", weight: 5, difficulty: 5, books: ["Química Vol. 1 (Feltre)"] },
   { name: "Química · Soluções e Propriedades Coligativas", group: "ita-ime", weight: 3, difficulty: 4 },
   { name: "Química · Termoquímica", group: "ita-ime", weight: 4, difficulty: 4 },
   { name: "Química · Cinética Química", group: "ita-ime", weight: 3, difficulty: 4 },
-  { name: "Química · Equilíbrio Químico", group: "ita-ime", weight: 5, difficulty: 5 },
+  { name: "Química · Equilíbrio Químico", group: "ita-ime", weight: 5, difficulty: 5, books: ["Química Vol. 2 (Feltre)"] },
   { name: "Química · Eletroquímica", group: "ita-ime", weight: 4, difficulty: 5 },
-  { name: "Química · Orgânica (Nomenclatura e Funções)", group: "ita-ime", weight: 5, difficulty: 5 },
+  { name: "Química · Orgânica (Nomenclatura e Funções)", group: "ita-ime", weight: 5, difficulty: 5, books: ["Química Vol. 3 (Feltre)", "Química Orgânica (Solomons & Fryhle)"] },
   { name: "Química · Reações Orgânicas e Mecanismos", group: "ita-ime", weight: 4, difficulty: 5 },
   { name: "Química · Radioatividade", group: "ita-ime", weight: 2, difficulty: 3 },
 
@@ -95,8 +191,8 @@ export const catalogSubjects: CatalogSubject[] = [
   { name: "Matemática ENEM · Funções e Progressões", group: "enem", weight: 3, difficulty: 3 },
   { name: "Matemática ENEM · Geometria", group: "enem", weight: 3, difficulty: 2 },
   { name: "Matemática ENEM · Grandezas, Medidas e Proporcionalidade", group: "enem", weight: 2, difficulty: 3 },
-  { name: "Biologia · Citologia e Bioquímica", group: "enem", weight: 3, difficulty: 3 },
-  { name: "Biologia · Genética e Evolução", group: "enem", weight: 3, difficulty: 3 },
+  { name: "Biologia · Citologia e Bioquímica", group: "enem", weight: 3, difficulty: 3, books: ["Biologia Vol. 1 (Amabis & Martho)"] },
+  { name: "Biologia · Genética e Evolução", group: "enem", weight: 3, difficulty: 3, books: ["Biologia das Células ao Organismo (Linhares)"] },
   { name: "Biologia · Ecologia e Meio Ambiente", group: "enem", weight: 2, difficulty: 2 },
   { name: "Biologia · Fisiologia Humana", group: "enem", weight: 3, difficulty: 3 },
   { name: "Biologia · Botânica", group: "enem", weight: 2, difficulty: 2 },
@@ -110,24 +206,24 @@ export const catalogSubjects: CatalogSubject[] = [
   { name: "Química ENEM · Físico-Química", group: "enem", weight: 3, difficulty: 3 },
   { name: "Química ENEM · Ambiental e Orgânica", group: "enem", weight: 2, difficulty: 3 },
   { name: "História · Geral", group: "enem", weight: 3, difficulty: 3 },
-  { name: "História · do Brasil", group: "enem", weight: 3, difficulty: 3 },
+  { name: "História · do Brasil", group: "enem", weight: 3, difficulty: 3, books: ["História do Brasil (Boris Fausto)"] },
   { name: "História · da América", group: "enem", weight: 2, difficulty: 3 },
-  { name: "Geografia · Física", group: "enem", weight: 3, difficulty: 3 },
+  { name: "Geografia · Física", group: "enem", weight: 3, difficulty: 3, books: ["Geografia — Coleção (Vesentini & Vlach)"] },
   { name: "Geografia · Humana", group: "enem", weight: 3, difficulty: 3 },
   { name: "Geografia · Cartografia e Geopolítica", group: "enem", weight: 2, difficulty: 3 },
-  { name: "Humanas · Sociologia", group: "enem", weight: 2, difficulty: 2 },
-  { name: "Humanas · Filosofia", group: "enem", weight: 2, difficulty: 2 },
+  { name: "Humanas · Sociologia", group: "enem", weight: 2, difficulty: 2, books: ["Sociologia para o Ensino Médio (Nelson Dacio)"] },
+  { name: "Humanas · Filosofia", group: "enem", weight: 2, difficulty: 2, books: ["Convite à Filosofia (Marilena Chauí)"] },
   { name: "Humanas · Atualidades", group: "enem", weight: 2, difficulty: 3 },
 
   /* Linguagens e Redação */
   { name: "Português · Gramática e Norma Culta", group: "linguagens", weight: 3, difficulty: 3 },
-  { name: "Português · Interpretação de Texto", group: "linguagens", weight: 4, difficulty: 3 },
-  { name: "Redação · Dissertação-Argumentativa", group: "linguagens", weight: 5, difficulty: 5 },
+  { name: "Português · Interpretação de Texto", group: "linguagens", weight: 4, difficulty: 3, books: ["Interpretação de Textos (Vânia Maria do Céu)"] },
+  { name: "Redação · Dissertação-Argumentativa", group: "linguagens", weight: 5, difficulty: 5, books: ["Como Fazer Redação para o ENEM (Willian Douglas)", "Guia Folha de Redação"] },
   { name: "Redação · Técnica e Autoral", group: "linguagens", weight: 3, difficulty: 4 },
   { name: "Literatura · Brasileira", group: "linguagens", weight: 3, difficulty: 3 },
   { name: "Literatura · Portuguesa", group: "linguagens", weight: 2, difficulty: 3 },
   { name: "Literatura · Movimentos Literários", group: "linguagens", weight: 2, difficulty: 2 },
-  { name: "Inglês · Grammar and Usage", group: "linguagens", weight: 2, difficulty: 2 },
+  { name: "Inglês · Grammar and Usage", group: "linguagens", weight: 2, difficulty: 2, books: ["English Grammar in Use (Murphy)"] },
   { name: "Inglês · Interpretação e Vocabulário", group: "linguagens", weight: 3, difficulty: 3 },
   { name: "Inglês · Phrasal Verbs e Idioms", group: "linguagens", weight: 2, difficulty: 3 },
   { name: "Espanhol", group: "linguagens", weight: 2, difficulty: 2 },

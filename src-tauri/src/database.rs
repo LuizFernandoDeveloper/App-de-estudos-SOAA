@@ -1628,6 +1628,35 @@ pub fn learning_speed(connection: &Connection, subject_id: Option<i64>) -> SqlRe
     Ok(rows)
 }
 
+/// Ordena matérias agrupando por matéria-mãe (prefixo antes de " · ").
+/// Grupos com maior pico de risco vêm primeiro; dentro do grupo, mantém a
+/// ordem original (ordem do catálogo), garantindo sub-áreas em sequência.
+fn sequence_by_parent(rows: Vec<(i64, String, String, i64)>) -> Vec<(i64, String, String, i64)> {
+    let mut buckets: Vec<(String, Vec<(i64, String, String, i64)>)> = Vec::new();
+    for row in rows {
+        let parent = row
+            .1
+            .split_once('·')
+            .map(|(head, _)| head.trim().to_string())
+            .unwrap_or_else(|| row.1.clone());
+        match buckets.iter_mut().find(|bucket| bucket.0 == parent) {
+            Some(bucket) => bucket.1.push(row),
+            None => buckets.push((parent, vec![row])),
+        }
+    }
+    buckets.sort_by(|left, right| {
+        let left_peak = left.1.iter().map(|row| row.3).max().unwrap_or(0);
+        let right_peak = right.1.iter().map(|row| row.3).max().unwrap_or(0);
+        right_peak
+            .cmp(&left_peak)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    buckets
+        .into_iter()
+        .flat_map(|(_, rows)| rows)
+        .collect()
+}
+
 pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlResult<PlanResponse> {
     use chrono::{Datelike, Duration, NaiveDate};
 
@@ -1658,7 +1687,10 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
             (subject.id, subject.name.clone(), subject.color.clone(), risk)
         })
         .collect();
-    risk.sort_by(|a, b| b.3.cmp(&a.3).then_with(|| a.1.cmp(&b.1)));
+    // Sub-áreas ("Matéria · Sub") vêm em sequência: agrupa por matéria-mãe,
+    // pais com maior pico de risco primeiro, e dentro do grupo preserva a
+    // ordem do catálogo para a rota alternar as sub-áreas uma após a outra.
+    risk = sequence_by_parent(risk);
 
     let weekday_labels = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
     let mut days = Vec::new();
@@ -2796,5 +2828,28 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM focus_sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(focus_rows, 2);
+    }
+
+    /// Sub-áreas da mesma matéria permanecem em bloco (ordem do catálogo),
+    /// e o pico de risco comanda a ordem dos grupos.
+    #[test]
+    fn sequence_by_parent_groups_subareas_keeps_catalog_order() {
+        let input = vec![
+            (1, "Matemática · Álgebra".to_string(), "red".to_string(), 40),
+            (2, "Matemática · Geometria".to_string(), "red".to_string(), 60),
+            (3, "Física · Mecânica".to_string(), "blue".to_string(), 90),
+            (4, "Biologia Ensino Médio".to_string(), "green".to_string(), 5),
+        ];
+        let ordered = sequence_by_parent(input);
+        let names: Vec<&str> = ordered.iter().map(|row| row.1.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Física · Mecânica",
+                "Matemática · Álgebra",
+                "Matemática · Geometria",
+                "Biologia Ensino Médio"
+            ]
+        );
     }
 }

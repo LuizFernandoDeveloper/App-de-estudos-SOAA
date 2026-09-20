@@ -27,7 +27,7 @@ import type {
   Topic
 } from "../shared/types";
 import { buildRetentionOverview } from "./retentionData";
-import { catalogToSubjects } from "./catalog";
+import { catalogToSubjects, sequenceByParent } from "./catalog";
 
 /* Feito para pré-visualização: dados fictícios determinísticos, sempre
    relativos a hoje. Nenhuma chamada ao backend é feita no modo demo. */
@@ -331,7 +331,11 @@ export const demoRetentionOverview: RetentionOverview = buildRetentionOverview({
 const DAY_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 
 export const buildDemoPlan = (subjectList: Subject[]): PlanResponse => {
-  const ordered = [...subjectList].sort((a, b) => b.computedIp - a.computedIp);
+  const score = (subject: Subject) => subject.computedIp + 2 * Math.max(0, subject.targetLevel - subject.currentLevel);
+  const ordered = sequenceByParent(
+    [...subjectList].sort((a, b) => score(b) - score(a)),
+    score
+  );
   const toFocus = (subject: Subject, slot: string, minutes: number, risk: number): PlanFocus => ({
     subjectId: subject.id,
     subjectName: subject.name,

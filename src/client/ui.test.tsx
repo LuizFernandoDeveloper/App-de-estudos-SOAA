@@ -188,6 +188,64 @@ describe("PlanWizard · Rota de prova (demo)", () => {
     expect(within(tasks).getAllByRole("checkbox")[0]).toBeChecked();
     expect(screen.getByText(/Lista de tarefas \(1\/\d+\)/)).toBeInTheDocument();
   });
+
+  it("área de ingresso eleva a ênfase e o modo padrão trava o peso da lista", () => {
+    render(<PlanWizard subjects={[]} profile={demoProfile} onClose={vi.fn()} demo />);
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+
+    const catalogList = screen.getByTestId("catalog-list");
+    const exatas = screen.getByRole("button", { name: /Exatas/ });
+    fireEvent.click(exatas);
+    expect(exatas).toHaveClass("active");
+    expect(within(catalogList).queryAllByText("foco maior").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Padrão da prova" }));
+    expect(within(catalogList).getAllByLabelText(/Peso de /)[0]).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Meu peso" }));
+    expect(within(catalogList).getAllByLabelText(/Peso de /)[0]).toBeEnabled();
+
+    fireEvent.click(exatas);
+    expect(screen.queryByText("foco maior")).not.toBeInTheDocument();
+  });
+
+  it("diagnóstico de nível de partida acompanha a matéria até a rota", async () => {
+    render(<PlanWizard subjects={demoSubjects} profile={demoProfile} onClose={vi.fn()} demo />);
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+
+    const grid = screen.getByTestId("subject-grid");
+    const tiles = within(grid).getAllByRole("button");
+    fireEvent.click(tiles[0]);
+    const picker = screen.getByRole("combobox", { name: /Nível de partida de/ });
+    expect(picker).toHaveValue("1");
+
+    fireEvent.change(picker, { target: { value: "4" } });
+    expect(within(grid).getByText(/nível 4/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Gerar rota/ }));
+    expect(await screen.findByText("Semanas até a prova")).toBeInTheDocument();
+  });
+
+  it("rota traz os grandes livros das sub-áreas e simulados semanais", async () => {
+    const { container } = render(<PlanWizard subjects={[]} profile={demoProfile} onClose={vi.fn()} demo />);
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+
+    const catalogList = screen.getByTestId("catalog-list");
+    const row1 = within(catalogList).getAllByLabelText(/Incluir /)[0];
+    const row2 = within(catalogList).getAllByLabelText(/Incluir /)[1];
+    fireEvent.click(row1);
+    fireEvent.click(row2);
+    fireEvent.click(screen.getByRole("button", { name: /Inserir selecionadas \(2\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Gerar rota/ }));
+    expect(await screen.findByText("Semanas até a prova")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText(/Grandes livros da rota/));
+    expect(container!.querySelectorAll(".plan-books-group").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Lista de tarefas/ }));
+    const sims = screen.getAllByText("Simulado estilo prova");
+    expect(sims.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(/prova cronometrada \+ revisão dos erros/).length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("RankingView (demo) · lista, zonas e alocação de reforço", () => {
