@@ -225,7 +225,7 @@ describe("PlanWizard · Rota de prova (demo)", () => {
     expect(await screen.findByText("Semanas até a prova")).toBeInTheDocument();
   });
 
-  it("rota traz os grandes livros das sub-áreas e simulados semanais", async () => {
+  it("rota traz os grandes livros das sub-áreas, revisão ativa e simulados na fase final", async () => {
     const { container } = render(<PlanWizard subjects={[]} profile={demoProfile} onClose={vi.fn()} demo />);
     fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
 
@@ -242,9 +242,12 @@ describe("PlanWizard · Rota de prova (demo)", () => {
     expect(container!.querySelectorAll(".plan-books-group").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: /Lista de tarefas/ }));
+    const recalls = screen.getAllByText("Revisão ativa");
     const sims = screen.getAllByText("Simulado estilo prova");
+    expect(recalls.length).toBeGreaterThanOrEqual(2);
     expect(sims.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText(/prova cronometrada \+ revisão dos erros/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(/recall espaçado: flashcards e questões sem consultar o material/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(/prova cronometrada \(provas anteriores\)/).length).toBeGreaterThanOrEqual(2);
   });
 });
 

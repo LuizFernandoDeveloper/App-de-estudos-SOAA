@@ -127,16 +127,33 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
         slot: focus.slot
       })))
     : [];
-  const weeklySims = plan
-    ? Array.from({ length: Math.max(1, plan.weeks) }, (_, week) => ({
-        key: `simulado-${week}`,
-        date: "",
-        dateLabel: `Semana ${week + 1}`,
-        subjectName: "Simulado estilo prova",
-        color: "violet",
-        minutes: 120,
-        slot: "prova cronometrada + revisão dos erros"
-      }))
+  const weeklyTasks = plan
+    ? (() => {
+        const examPhase = Math.max(2, Math.floor(plan.weeks / 4));
+        return Array.from({ length: Math.max(1, plan.weeks) }, (_, week) => {
+          const examMode = week >= Math.max(1, plan.weeks - examPhase);
+          if (examMode) {
+            return {
+              key: `simulado-${week}`,
+              date: "",
+              dateLabel: `Semana ${week + 1}`,
+              subjectName: "Simulado estilo prova",
+              color: "violet",
+              minutes: 120,
+              slot: "prova cronometrada (provas anteriores) + categorizar erros: não sabia × errei × chutei"
+            };
+          }
+          return {
+            key: `recall-${week}`,
+            date: "",
+            dateLabel: `Semana ${week + 1}`,
+            subjectName: "Revisão ativa",
+            color: "cyan",
+            minutes: 40,
+            slot: "recall espaçado: flashcards e questões sem consultar o material"
+          };
+        });
+      })()
     : [];
   const routeBooks = plan
     ? (() => {
@@ -160,7 +177,7 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
         return grouped;
       })()
     : [];
-  const doneCount = [...tasks, ...weeklySims].filter((task) => doneTasks.has(task.key)).length;
+  const doneCount = [...tasks, ...weeklyTasks].filter((task) => doneTasks.has(task.key)).length;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -224,11 +241,11 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
           {step === 2 && plan && <div className="form-stack">
             {plan.riskName && <div className="cog-alert warning"><AlertTriangle size={16} /><div><strong>Matéria de maior risco: {plan.riskName.split("·")[0].trim()}.</strong><span>Recebe a primeira janela matinal — o período de menor resistência à procrastinação.</span></div></div>}
             <div className="focus-summary-row"><div><strong>{plan.weeks}</strong><span>semanas até a prova</span></div><div><strong>{plan.days.length}</strong><span>dias na rota</span></div><div><strong>{Math.max(1, plan.days[0]?.focusSubjects.length ?? 0)}</strong><span>focos por dia</span></div></div>
-            <div className="wizard-tabs"><button className={`tab-chip ${planTab === "rota" ? "active" : ""}`} onClick={() => setPlanTab("rota")}><CalendarCheck size={14} /> Rota</button><button className={`tab-chip ${planTab === "tarefas" ? "active" : ""}`} onClick={() => setPlanTab("tarefas")}><ListChecks size={14} /> Lista de tarefas ({doneCount}/{tasks.length + weeklySims.length})</button></div>
+            <div className="wizard-tabs"><button className={`tab-chip ${planTab === "rota" ? "active" : ""}`} onClick={() => setPlanTab("rota")}><CalendarCheck size={14} /> Rota</button><button className={`tab-chip ${planTab === "tarefas" ? "active" : ""}`} onClick={() => setPlanTab("tarefas")}><ListChecks size={14} /> Lista de tarefas ({doneCount}/{tasks.length + weeklyTasks.length})</button></div>
             {planTab === "rota" && <><div className="plan-days" data-testid="plan-days">{plan.days.slice(0, 7).map((day: PlanDay) => <div className="plan-day" key={day.date}><span className="plan-day-date">{dayLabel(day.date)}</span><span className="plan-day-name">{day.weekdayLabel}</span><div className="plan-day-focus">{day.focusSubjects.map((focus: PlanFocus) => <span className="plan-chip" key={`${day.date}-${focus.subjectId}`} title={booksForName(focus.subjectName)?.join(" · ") ?? focus.subjectName}><i style={{ background: color(focus.color) }} />{focus.subjectName.split("·")[0].trim()}<b>{focus.minutes}m</b><em>{focus.slot}</em></span>)}</div></div>)}</div>
             {routeBooks.length > 0 && <details className="plan-books"><summary><BookOpen size={14} /> Grandes livros da rota ({routeBooks.reduce((total, group) => total + group.books.length, 0)})</summary><div className="plan-books-list">{routeBooks.map((group) => <div className="plan-books-group" key={group.parent}><strong>{group.parent}</strong><ul>{group.books.map((book) => <li key={book}>{book}</li>)}</ul></div>)}</div></details>}
             <p className="cogn-footnote"><CalendarCheck size={14} /> A rota gira por todas as matérias de ataque: o bloco principal alterna a janela matinal entre as menores resistências à procrastinação e o reforço complementa com matérias adicionais, sem repetir o mesmo foco todos os dias. As sub-áreas de uma mesma matéria aparecem em sequência (ex.: Cinemática → Dinâmica → Energia → …). Passe o mouse num chip para ver os livros daquela sub-área.</p></>}
-            {planTab === "tarefas" && <div className="task-list" data-testid="task-list">{tasks.map((task) => <label className={`task-row ${doneTasks.has(task.key) ? "done" : ""}`} key={task.key}><input type="checkbox" checked={doneTasks.has(task.key)} onChange={() => setDoneTasks((prev) => { const next = new Set(prev); if (next.has(task.key)) next.delete(task.key); else next.add(task.key); return next; })} /><span className="task-date">{task.dateLabel}</span><i style={{ background: color(task.color) }} /><span className="task-name">{task.subjectName}</span><b>{task.minutes}m</b><em>{task.slot}</em></label>)}<p className="task-group-title">Revisão semanal</p>{weeklySims.map((task) => <label className={`task-row sim ${doneTasks.has(task.key) ? "done" : ""}`} key={task.key}><input type="checkbox" checked={doneTasks.has(task.key)} onChange={() => setDoneTasks((prev) => { const next = new Set(prev); if (next.has(task.key)) next.delete(task.key); else next.add(task.key); return next; })} /><span className="task-date">{task.dateLabel}</span><i style={{ background: color(task.color) }} /><span className="task-name">{task.subjectName}</span><b>{task.minutes}m</b><em>{task.slot}</em></label>)}<p className="cogn-footnote"><ListChecks size={14} /> Marque os blocos conforme executa — a lista vira seu plano diário de tarefas até a prova, com um simulado cronometrado por semana para medir a evolução.</p></div>}
+            {planTab === "tarefas" && <div className="task-list" data-testid="task-list">{tasks.map((task) => <label className={`task-row ${doneTasks.has(task.key) ? "done" : ""}`} key={task.key}><input type="checkbox" checked={doneTasks.has(task.key)} onChange={() => setDoneTasks((prev) => { const next = new Set(prev); if (next.has(task.key)) next.delete(task.key); else next.add(task.key); return next; })} /><span className="task-date">{task.dateLabel}</span><i style={{ background: color(task.color) }} /><span className="task-name">{task.subjectName}</span><b>{task.minutes}m</b><em>{task.slot}</em></label>)}<p className="task-group-title">Ritmo semanal</p>{weeklyTasks.map((task) => <label className={`task-row sim ${doneTasks.has(task.key) ? "done" : ""}`} key={task.key}><input type="checkbox" checked={doneTasks.has(task.key)} onChange={() => setDoneTasks((prev) => { const next = new Set(prev); if (next.has(task.key)) next.delete(task.key); else next.add(task.key); return next; })} /><span className="task-date">{task.dateLabel}</span><i style={{ background: color(task.color) }} /><span className="task-name">{task.subjectName}</span><b>{task.minutes}m</b><em>{task.slot}</em></label>)}<p className="cogn-footnote"><ListChecks size={14} /> Marque os blocos conforme executa — a lista vira seu plano diário de tarefas até a prova. Seguindo a ciência da aprendizagem (MIT Open Learning / Springer), o primeiro período usa <strong>revisão ativa espaçada</strong> do que já foi estudado; o último quarto troca para <strong>simulados cronometrados com provas anteriores</strong>, e a cada erro classifique a causa (não sabia × errei × chutei) para ajustar o rumo.</p></div>}
           </div>}
         </div>
 
