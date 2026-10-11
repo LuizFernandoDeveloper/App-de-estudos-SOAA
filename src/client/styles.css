@@ -145,6 +145,14 @@ h3 { font-size: 15px; line-height: 1.4; }
 
 /* --- Wizard da rota (F1) --- */
 .heading-actions { display: flex; gap: 10px; }.wizard-steps { display: flex; gap: 6px; margin: -6px 0 16px; }.wizard-steps span { padding: 5px 11px; border-radius: 999px; font-size: 11px; font-weight: 800; color: #77899f; background: #0f1c2c; border: 1px solid #2b3e57; }.wizard-steps span.active { color: #cbb9ff; background: #392f6b3d; border-color: #6d5ce866; }.wizard-modal { width: min(100%, 560px); }.wizard-modal .subject-grid { margin: 4px 0 2px; }.plan-days { display: grid; gap: 7px; max-height: 300px; overflow-y: auto; padding-right: 3px; }.plan-day { display: grid; grid-template-columns: 64px 34px minmax(0, 1fr); gap: 9px; align-items: center; padding: 9px 11px; border-radius: 10px; background: #0d1b2d; border: 1px solid #213148; }.plan-day-date { color: #8597ad; font-size: 10px; }.plan-day-name { color: #e3edfa; font-size: 11px; font-weight: 800; }.plan-day-focus { display: flex; flex-wrap: wrap; gap: 6px; }.plan-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: #111d2d; border: 1px solid #2b3e57; color: #b6c6d9; font-size: 11px; }.plan-chip i { width: 8px; height: 8px; border-radius: 50%; }.plan-chip b { color: #6eecb2; font-size: 11px; }.plan-chip em { color: #77899f; font-style: normal; font-size: 10px; }
+.plan-phases { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); margin-bottom: 10px; }
+.plan-phase { display: grid; gap: 2px; padding: 9px 11px; border-radius: 10px; background: #0d1b2d; border: 1px solid #213148; }
+.plan-phase.reta_final { border-color: #6d5ce866; }
+.plan-phase-tag { justify-self: start; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 800; color: #8fd7ff; background: #0e2a3d; border: 1px solid #2b5e7d; }
+.plan-phase.reta_final .plan-phase-tag { color: #cbb9ff; background: #392f6b3d; border-color: #6d5ce866; }
+.plan-phase strong { font-size: 12px; color: #e3edfa; }
+.plan-phase small { font-size: 10px; color: #8597ad; }
+.plan-phase em { font-style: normal; font-size: 10px; color: #77899f; }
 @media (max-width: 760px) { .plan-day { grid-template-columns: 52px 28px minmax(0, 1fr); }.heading-actions { flex-wrap: wrap; } }
 
 /* --- Régua de páginas (Avanço) --- */

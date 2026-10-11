@@ -14,7 +14,7 @@ use crate::models::{
     FocusZone, FsrsReview, LearningSpeed, MaterialInput, MaterialProgress, MaterialReminder,
     MaterialStrategy, MemoryDecayProjection, MemoryPoint, PerformanceLiveStream,
     PerformanceLiveTick, PerformancePoint, PlanDay, PlanFocus,
-    PlanInput, PlanResponse, Profile, ProfileInput, QuestionProgress, QuestionResult,
+    PlanInput, PlanPhase, PlanResponse, Profile, ProfileInput, QuestionProgress, QuestionResult,
     QuestionResultInput, RescheduleItem, ReschedulePlan, RetentionCurve, RetentionCurvePoint,
     RetentionOverview, RetentionSeriesInfo, SessionSummary, SpacedRepetitionItem, StrategyMatch,
     StudyMaterial, Subject, SubjectAccuracyPoint, SubjectPerformance, SubjectRanking,
@@ -1679,6 +1679,40 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
     let daily_minutes = (weekly_minutes * weeks as f64 / total_days / 5.0).round() as i64 * 5;
     let daily_minutes = daily_minutes.max(5);
 
+    // Fases por evidência: a construção consolida com revisão ativa espaçada
+    // (recall semanal); o último quarto — mínimo de duas semanas — troca para
+    // simulados cronometrados com provas anteriores.
+    let exam_phase_weeks = (weeks / 4).max(2);
+    let reta_from = (weeks - exam_phase_weeks).max(1);
+    let mut phases = vec![PlanPhase {
+        mode: "construcao".to_string(),
+        title: "Fase de construção".to_string(),
+        routine: "Revisão ativa".to_string(),
+        detail: "recall espaçado: flashcards e questões sem consultar o material".to_string(),
+        minutes_per_week: 40,
+        from_week: 1,
+        to_week: reta_from,
+        start_date: start.format("%Y-%m-%d").to_string(),
+        end_date: if weeks > reta_from {
+            (start + Duration::days(reta_from * 7 - 1)).format("%Y-%m-%d").to_string()
+        } else {
+            exam.format("%Y-%m-%d").to_string()
+        },
+    }];
+    if weeks > reta_from {
+        phases.push(PlanPhase {
+            mode: "reta_final".to_string(),
+            title: "Reta final".to_string(),
+            routine: "Simulado estilo prova".to_string(),
+            detail: "prova cronometrada (provas anteriores) + categorizar erros: não sabia × errei × chutei".to_string(),
+            minutes_per_week: 120,
+            from_week: reta_from + 1,
+            to_week: weeks,
+            start_date: (start + Duration::days(reta_from * 7)).format("%Y-%m-%d").to_string(),
+            end_date: exam.format("%Y-%m-%d").to_string(),
+        });
+    }
+
     let subjects = list_subjects(connection)?;
     let mut risk: Vec<(i64, String, String, i64)> = subjects
         .iter()
@@ -1691,6 +1725,14 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
     // pais com maior pico de risco primeiro, e dentro do grupo preserva a
     // ordem do catálogo para a rota alternar as sub-áreas uma após a outra.
     risk = sequence_by_parent(risk);
+    if risk.is_empty() {
+        return Ok(PlanResponse {
+            weeks,
+            risk_name: None,
+            phases,
+            days: Vec::new(),
+        });
+    }
 
     let weekday_labels = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
     let mut days = Vec::new();
@@ -1704,15 +1746,8 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
 
         // Rotação sem repetição: o bloco principal gira por todas as matérias
         // ordenadas por risco (IP + déficit de nível) em vez de repetir as de
-        // maior escore todos os dias. Sem matérias, a rota fica vazia.
+        // maior escore todos os dias.
         let subject_count = risk.len();
-        if subject_count == 0 {
-            return Ok(PlanResponse {
-                weeks,
-                risk_name: None,
-                days,
-            });
-        }
         let primary_index = offset % subject_count;
         let (id0, name0, color0, risk0) = &risk[primary_index];
         let secondary_index = (offset * 2 + 1) % subject_count;
@@ -1754,6 +1789,7 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
     Ok(PlanResponse {
         weeks,
         risk_name: Some(risk[0].1.clone()),
+        phases,
         days,
     })
 }
@@ -2851,5 +2887,157 @@ mod tests {
                 "Biologia Ensino Médio"
             ]
         );
+    }
+
+    /// Rota de prova: rotação sem repetição, dimensionamento em blocos de 5
+    /// e fases por evidência (construção com recall semanal; reta final com
+    /// simulados no último quarto).
+    #[test]
+    fn generate_study_plan_rotates_dimensions_and_splits_phases() {
+        let connection = memory_connection();
+        let response = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: "2026-01-05".into(),
+                exam_date: "2026-04-05".into(),
+                total_hours: 36.0,
+            },
+        )
+        .unwrap();
+
+        // Horizonte de 90 dias → 12 semanas; rota limitada a 42 dias.
+        assert_eq!(response.weeks, 12);
+        assert_eq!(response.days.len(), 42);
+        assert!(response.risk_name.is_some());
+
+        // Carga semanal de 36 h distribuída: 2160 × 12 / 91 em blocos de 5.
+        // Nos dias em que o reforço colidiria com o principal, só o principal
+        // entra (sem duplicar o mesmo foco no dia).
+        let mut single_focus_days = 0;
+        for day in &response.days {
+            let total: i64 = day.focus_subjects.iter().map(|focus| focus.minutes).sum();
+            match day.focus_subjects.len() {
+                1 => single_focus_days += 1,
+                2 => assert_eq!(total, 285),
+                other => panic!("a rota tem no máximo dois focos por dia: {other}"),
+            }
+            for focus in &day.focus_subjects {
+                assert_eq!(focus.minutes % 5, 0, "blocos devem ser múltiplos de 5");
+                assert!(focus.minutes >= 15);
+            }
+        }
+        assert_eq!(
+            single_focus_days, 6,
+            "7 matérias em 42 dias: o principal colide com o reforço a cada 7 dias"
+        );
+
+        // Rotação: o alvo principal nunca repete em dias consecutivos e o
+        // reforço do mesmo dia nunca coincide com o principal.
+        for window in response.days.windows(2) {
+            assert_ne!(
+                window[0].focus_subjects[0].subject_id, window[1].focus_subjects[0].subject_id,
+                "o bloco principal deve girar por todas as matérias"
+            );
+        }
+        for day in &response.days {
+            if day.focus_subjects.len() == 2 {
+                assert_ne!(day.focus_subjects[0].subject_id, day.focus_subjects[1].subject_id);
+            }
+        }
+
+        // Fases: construção nas semanas 1–9 e reta final nas 10–12.
+        assert_eq!(response.phases.len(), 2);
+        let construction = &response.phases[0];
+        assert_eq!(construction.mode, "construcao");
+        assert_eq!((construction.from_week, construction.to_week), (1, 9));
+        assert_eq!(construction.minutes_per_week, 40);
+        assert_eq!(construction.start_date, "2026-01-05");
+        assert_eq!(construction.end_date, "2026-03-08");
+        let reta = &response.phases[1];
+        assert_eq!(reta.mode, "reta_final");
+        assert_eq!((reta.from_week, reta.to_week), (10, 12));
+        assert_eq!(reta.minutes_per_week, 120);
+        assert_eq!(reta.start_date, "2026-03-09");
+        assert_eq!(reta.end_date, "2026-04-05");
+    }
+
+    /// Horizontes curtos: a reta final encolhe antes da construção e uma
+    /// semana de horizonte mantém apenas a fase de construção.
+    #[test]
+    fn generate_study_plan_phase_split_on_short_horizons() {
+        let connection = memory_connection();
+        let two_weeks = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: "2026-01-05".into(),
+                exam_date: "2026-01-19".into(),
+                total_hours: 36.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(two_weeks.weeks, 2);
+        assert_eq!(two_weeks.phases.len(), 2);
+        assert_eq!(
+            (two_weeks.phases[0].from_week, two_weeks.phases[0].to_week),
+            (1, 1)
+        );
+        assert_eq!(two_weeks.phases[0].end_date, "2026-01-11");
+        assert_eq!(
+            (two_weeks.phases[1].from_week, two_weeks.phases[1].to_week),
+            (2, 2)
+        );
+        assert_eq!(two_weeks.phases[1].start_date, "2026-01-12");
+        assert_eq!(two_weeks.phases[1].end_date, "2026-01-19");
+
+        let one_week = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: "2026-01-05".into(),
+                exam_date: "2026-01-12".into(),
+                total_hours: 36.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(one_week.weeks, 1);
+        assert_eq!(one_week.phases.len(), 1);
+        assert_eq!(one_week.phases[0].mode, "construcao");
+        assert_eq!(one_week.phases[0].end_date, "2026-01-12");
+    }
+
+    /// Sem matérias a rota fica vazia, mas as fases continuam declaradas.
+    #[test]
+    fn generate_study_plan_without_subjects_keeps_phases() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "foreign_keys", "ON").unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        migrate(&connection).unwrap();
+
+        let response = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: "2026-01-05".into(),
+                exam_date: "2026-04-05".into(),
+                total_hours: 36.0,
+            },
+        )
+        .unwrap();
+        assert!(response.days.is_empty());
+        assert!(response.risk_name.is_none());
+        assert_eq!(response.phases.len(), 2);
+    }
+
+    /// A prova precisa ser posterior ao início da rota.
+    #[test]
+    fn generate_study_plan_rejects_exam_not_after_start() {
+        let connection = memory_connection();
+        let result = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: "2026-04-05".into(),
+                exam_date: "2026-04-05".into(),
+                total_hours: 36.0,
+            },
+        );
+        assert!(result.is_err());
     }
 }

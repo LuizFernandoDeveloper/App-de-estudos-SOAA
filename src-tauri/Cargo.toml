@@ -19,3 +19,8 @@ serde_json = "1.0"
 rusqlite = { version = "0.38", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 
+# O Smart App Control (os error 4551) bloqueia a DLL debug reproduzível desse
+# proc-macro; o opt-level diverge o binário e libera o carregamento no Windows.
+[profile.dev.package."serialize-to-javascript-impl"]
+opt-level = 1
+

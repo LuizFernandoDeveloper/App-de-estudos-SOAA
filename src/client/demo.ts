@@ -11,6 +11,7 @@ import type {
   PerformancePoint,
   PlanDay,
   PlanFocus,
+  PlanPhase,
   PlanResponse,
   Profile,
   ReschedulePlan,
@@ -358,7 +359,36 @@ export const buildDemoPlan = (subjectList: Subject[]): PlanResponse => {
     }
     days.push({ date, weekdayLabel: DAY_LABELS[(weekday + 7 - 1) % 7], focusSubjects: planned });
   }
-  return { weeks: 12, riskName: ordered[0]?.name ?? null, days };
+  const weeks = 12;
+  const examPhaseWeeks = Math.max(2, Math.floor(weeks / 4));
+  const retaFrom = Math.max(1, weeks - examPhaseWeeks);
+  const phases: PlanPhase[] = [
+    {
+      mode: "construcao",
+      title: "Fase de construção",
+      routine: "Revisão ativa",
+      detail: "recall espaçado: flashcards e questões sem consultar o material",
+      minutesPerWeek: 40,
+      fromWeek: 1,
+      toWeek: retaFrom,
+      startDate: addDaysIso(0),
+      endDate: addDaysIso(retaFrom * 7 - 1)
+    }
+  ];
+  if (weeks > retaFrom) {
+    phases.push({
+      mode: "reta_final",
+      title: "Reta final",
+      routine: "Simulado estilo prova",
+      detail: "prova cronometrada (provas anteriores) + categorizar erros: não sabia × errei × chutei",
+      minutesPerWeek: 120,
+      fromWeek: retaFrom + 1,
+      toWeek: weeks,
+      startDate: addDaysIso(retaFrom * 7),
+      endDate: addDaysIso(weeks * 7 - 1)
+    });
+  }
+  return { weeks, riskName: ordered[0]?.name ?? null, phases, days };
 };
 
 export const demoPlan: PlanResponse = buildDemoPlan(demoSubjects);

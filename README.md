@@ -281,7 +281,14 @@ Escolha a prova alvo e o catálogo já vem com os **pesos padrão do exame**
 - **Personalizado** — catálogo completo.
 
 A rota também gera a **lista de tarefas por dia** (matéria, turno e duração),
-sem repetir os mesmos focos entre dias consecutivos.
+sem repetir os mesmos focos entre dias consecutivos. O plano entra em
+**duas fases por evidência**, com as datas de cada uma na aba *Rota*:
+
+- **Fase de construção** — consolidação com **revisão ativa espaçada**
+  (recall semanal de 40 min: flashcards e questões sem consultar o material);
+- **Reta final** — o último quarto da rota vira **simulados cronometrados
+  de provas anteriores** (120 min por semana, com os erros categorizados em
+  não sabia × errei × chutei).
 
 > ⏱️ **Não escolha por gosto:** o peso padrão da prova já reflete a distribuição
 > de questões do vestibular. Ajuste quando seu déficit pedir.

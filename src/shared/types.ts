@@ -321,9 +321,22 @@ export interface PlanDay {
   focusSubjects: PlanFocus[];
 }
 
+export interface PlanPhase {
+  mode: "construcao" | "reta_final";
+  title: string;
+  routine: string;
+  detail: string;
+  minutesPerWeek: number;
+  fromWeek: number;
+  toWeek: number;
+  startDate: string;
+  endDate: string;
+}
+
 export interface PlanResponse {
   weeks: number;
   riskName: string | null;
+  phases: PlanPhase[];
   days: PlanDay[];
 }
 

@@ -238,6 +238,14 @@ describe("PlanWizard · Rota de prova (demo)", () => {
     fireEvent.click(screen.getByRole("button", { name: /Gerar rota/ }));
     expect(await screen.findByText("Semanas até a prova")).toBeInTheDocument();
 
+    const phases = screen.getByTestId("plan-phases");
+    expect(within(phases).getByText("Fase de construção")).toBeInTheDocument();
+    expect(within(phases).getByText("Reta final")).toBeInTheDocument();
+    expect(within(phases).getByText(/Semanas 1–9/)).toBeInTheDocument();
+    expect(within(phases).getByText(/Semanas 10–12/)).toBeInTheDocument();
+    expect(within(phases).getByText(/40 min\/semana/)).toBeInTheDocument();
+    expect(within(phases).getByText(/120 min\/semana/)).toBeInTheDocument();
+
     fireEvent.click(screen.getByText(/Grandes livros da rota/));
     expect(container!.querySelectorAll(".plan-books-group").length).toBeGreaterThan(0);
 

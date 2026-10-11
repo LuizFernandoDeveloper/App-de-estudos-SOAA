@@ -542,9 +542,24 @@ pub struct PlanDay {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PlanPhase {
+    pub mode: String,
+    pub title: String,
+    pub routine: String,
+    pub detail: String,
+    pub minutes_per_week: i64,
+    pub from_week: i64,
+    pub to_week: i64,
+    pub start_date: String,
+    pub end_date: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanResponse {
     pub weeks: i64,
     pub risk_name: Option<String>,
+    pub phases: Vec<PlanPhase>,
     pub days: Vec<PlanDay>,
 }
 
