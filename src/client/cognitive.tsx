@@ -114,7 +114,7 @@ const shortIsoDate = (iso: string) => {
   return `${day}/${month}`;
 };
 
-function SubjectImprovementTooltip({ active, payload }: { active?: boolean; payload?: Array<{ name?: string | number; value?: number | string | Array<number | string>; color?: string; payload?: Record<string, unknown> }> }) {
+export function SubjectImprovementTooltip({ active, payload }: { active?: boolean; payload?: Array<{ name?: string | number; value?: number | string | Array<number | string>; color?: string; payload?: Record<string, unknown> }> }) {
   if (!active || !payload?.length) return null;
   const items = payload.filter((entry) => typeof entry.value === "number");
   if (!items.length) return null;
@@ -257,7 +257,7 @@ const GRADE_OPTIONS: Array<{ grade: ReviewGrade; label: string; tone: string }> 
   { grade: "easy", label: "Fácil", tone: "easy" }
 ];
 
-function MemoryDecayTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey?: string | number; value?: number; payload?: MemoryPoint }>; label?: string | number }) {
+export function MemoryDecayTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ dataKey?: string | number; value?: number; payload?: MemoryPoint }>; label?: string | number }) {
   if (!active || !payload?.length) return null;
   const point = payload[0]?.payload;
   if (!point) return null;

@@ -2,7 +2,7 @@ mod database;
 mod models;
 mod scheduler;
 
-use std::{fs, sync::Arc};
+use std::{env, fs, path::PathBuf, sync::Arc};
 
 use chrono::Local;
 use database::AppState;
@@ -119,6 +119,12 @@ fn validate_focus_input(input: &FocusSessionInput) -> CommandResult<()> {
     }
     if input.elapsed_minutes < 0 || input.elapsed_minutes > 600 {
         return Err("O tempo executado informado é inválido.".into());
+    }
+    if input
+        .gross_minutes
+        .is_some_and(|gross| gross < input.elapsed_minutes || gross > 1_440)
+    {
+        return Err("A janela bruta deve ser maior ou igual ao foco líquido e não passar de 24 horas.".into());
     }
     if input.interrupts < 0 {
         return Err("O número de interrupções não pode ser negativo.".into());
@@ -513,6 +519,16 @@ async fn list_focus_sessions(
 }
 
 #[tauri::command]
+async fn list_pomodoro_sessions(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> CommandResult<Vec<FocusSession>> {
+    with_connection(state, |connection| {
+        database::list_pomodoro_sessions(connection).map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 async fn complete_focus_session(
     state: tauri::State<'_, Arc<AppState>>,
     input: FocusSessionInput,
@@ -748,8 +764,14 @@ async fn get_consolidated_report(
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
+            let app_data_dir = match (cfg!(debug_assertions), env::var_os("SOAA_DEV_DATA_DIR")) {
+                (true, Some(directory)) => PathBuf::from(directory),
+                _ => app.path().app_data_dir()?,
+            };
             fs::create_dir_all(&app_data_dir)?;
+            // Keep this identifier and filename unchanged between releases so
+            // upgrades reopen the user's existing database instead of creating
+            // a new empty profile.
             let database_path = app_data_dir.join("soaa.db");
             app.manage(Arc::new(AppState::new(&database_path)?));
             Ok(())
@@ -782,6 +804,7 @@ pub fn run() {
             save_day_allocation,
             delete_day_allocation,
             list_focus_sessions,
+            list_pomodoro_sessions,
             complete_focus_session,
             get_focus_timebox,
             log_brain_dump,

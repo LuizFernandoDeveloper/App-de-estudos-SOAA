@@ -3,13 +3,13 @@ import { AlertTriangle, ArrowRight, BookOpen, CalendarCheck, CheckCircle2, Flag,
 import { api, type SubjectInput } from "./api";
 import { buildDemoPlan } from "./demo";
 import { color } from "./colors";
-import { areaWeight, booksForName, catalogSubjectsForTrack, CATALOG_COLORS, CATALOG_GROUP_LABELS, emphasize, EXAM_TRACKS, FOCUS_AREAS, parentArea, type FocusAreaId } from "./catalog";
+import { booksForName, catalogSubjectsFor, CATALOG_COLORS, CATALOG_GROUP_LABELS, COURSE_GOALS, courseAreaWeight, emphasize, emphasizeCourse, EXAM_TRACKS, extensionGroup, FOCUS_AREAS, parentArea, PROFICIENCY_LEVELS, type CourseGoal, type FocusAreaId } from "./catalog";
 import type { ExamTrack, PlanDay, PlanFocus, PlanInput, PlanResponse, Profile, Subject } from "../shared/types";
 
-export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }: { subjects: Subject[]; profile: Profile; onClose: () => void; demo: boolean; onSubjectAdded?: (subject: Subject) => void }) {
+export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded, onSubjectRemoved, onCourseChange, onDatesChange, onAreaChange }: { subjects: Subject[]; profile: Profile; onClose: () => void; demo: boolean; onSubjectAdded?: (subject: Subject) => void; onSubjectRemoved?: (subject: Subject) => boolean; onCourseChange?: (courseId: string | null) => void; onDatesChange?: (dates: { startDate: string; examDate: string }) => void; onAreaChange?: (areaId: FocusAreaId | null) => void }) {
   const todayIso = new Date().toISOString().slice(0, 10);
   const [step, setStep] = useState(0);
-  const [form, setForm] = useState<PlanInput>({ startDate: todayIso, examDate: profile.examDate ?? todayIso, totalHours: profile.dailyHours * profile.weeklyDays });
+  const [form, setForm] = useState<PlanInput>({ startDate: profile.startDate ?? todayIso, examDate: profile.examDate ?? todayIso, totalHours: profile.dailyHours * profile.weeklyDays });
   const [items, setItems] = useState<Subject[]>(subjects);
   const [selected, setSelected] = useState<Set<number>>(new Set(subjects.slice(0, 2).map((s) => s.id)));
   const [plan, setPlan] = useState<PlanResponse | null>(null);
@@ -18,7 +18,12 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
   const [track, setTrack] = useState<ExamTrack>(profile.examTrack);
   const [catalogChecked, setCatalogChecked] = useState<Set<string>>(new Set());
   const [catalogWeights, setCatalogWeights] = useState<Record<string, number>>({});
-  const [area, setArea] = useState<FocusAreaId | null>(null);
+  /** A ênfase de área vem persistida no perfil (painel Rota): abrir o wizard já mostra a escolha ativa. */
+  const [area, setArea] = useState<FocusAreaId | null>(() => (profile.focusArea as FocusAreaId | null) ?? null);
+  /** A meta do curso vem persistida no perfil: escolher aqui atualiza o alvo de todas as telas. */
+  const [course, setCourse] = useState<CourseGoal | null>(() =>
+    COURSE_GOALS.find((candidate) => candidate.id === profile.preferredCourse) ?? null
+  );
   const [weightMode, setWeightMode] = useState<"padrao" | "manual">("manual");
   const [levels, setLevels] = useState<Record<number, number>>({});
   const [planTab, setPlanTab] = useState<"rota" | "tarefas">("rota");
@@ -26,13 +31,15 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
 
   const toggle = (id: number) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const activeArea = FOCUS_AREAS.find((candidate) => candidate.id === area) ?? null;
-  const weeksLeft = form.examDate && form.startDate && form.examDate > form.startDate ? Math.max(1, Math.round((new Date(form.examDate).getTime() - new Date(form.startDate).getTime()) / (1000 * 60 * 60 * 24 * 7))) : 1;
+  const extension = extensionGroup(course);
+  const nextSubjectId = () => Math.max(0, ...items.map((subject) => subject.id)) + 1;
+  const weeksLeft = form.examDate && form.startDate && form.examDate > form.startDate ? Math.max(1, Math.floor((new Date(form.examDate).getTime() - new Date(form.startDate).getTime()) / (1000 * 60 * 60 * 24 * 7))) : 1;
 
   const addSubject = async () => {
     const name = draft.trim();
     if (!name) return;
     if (demo) {
-      const subject: Subject = { id: 900000 + (items.length + 1), userId: 0, name, weight: 3, difficulty: 3, computedIp: 9, color: "blue", goalAccuracy: 70, goalCoverage: 60, currentLevel: 1, targetLevel: 1, createdAt: todayIso };
+      const subject: Subject = { id: nextSubjectId(), userId: 0, name, weight: 3, difficulty: 3, computedIp: 9, color: "blue", goalAccuracy: 70, goalCoverage: 60, currentLevel: 1, targetLevel: 4, createdAt: todayIso };
       setItems((previous) => [...previous, subject]);
       setSelected((previous) => new Set(previous).add(subject.id));
       setDraft("");
@@ -51,17 +58,24 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
     }
   };
 
+  const removeSubject = (subject: Subject) => {
+    if (onSubjectRemoved?.(subject) === false) return;
+    setItems((previous) => previous.filter((item) => item.id !== subject.id));
+    setSelected((previous) => { const next = new Set(previous); next.delete(subject.id); return next; });
+  };
+
   const toggleCatalog = (name: string) => setCatalogChecked((prev) => { const next = new Set(prev); if (next.has(name)) next.delete(name); else next.add(name); return next; });
 
   const insertCatalog = async () => {
-    const trackList = catalogSubjectsForTrack(track);
+    const trackList = catalogSubjectsFor(track, course);
     const toAdd = trackList.filter((entry) => catalogChecked.has(entry.name) && !items.some((subject) => subject.name === entry.name));
     if (!toAdd.length) return;
     if (demo) {
+      const baseId = nextSubjectId();
       const created = toAdd.map((entry, index) => {
-        const weight = catalogWeights[entry.name] ?? areaWeight(activeArea, entry);
+        const weight = catalogWeights[entry.name] ?? courseAreaWeight(course, activeArea, entry);
         return {
-          id: 900000 + items.length + index + 1,
+          id: baseId + index,
           userId: 0,
           name: entry.name,
           weight,
@@ -71,7 +85,7 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
           goalAccuracy: 70,
           goalCoverage: 60,
           currentLevel: 1,
-          targetLevel: 1,
+          targetLevel: emphasizeCourse(course, entry) ? 3 : 2,
           createdAt: todayIso
         } as Subject;
       });
@@ -81,7 +95,7 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
     } else {
       try {
         for (const entry of toAdd) {
-          const subject = await api.createSubject({ name: entry.name, weight: catalogWeights[entry.name] ?? areaWeight(activeArea, entry), difficulty: entry.difficulty });
+          const subject = await api.createSubject({ name: entry.name, weight: catalogWeights[entry.name] ?? courseAreaWeight(course, activeArea, entry), difficulty: entry.difficulty, currentLevel: 1, targetLevel: emphasizeCourse(course, entry) ? 3 : 2 });
           setItems((previous) => [...previous, subject]);
           setSelected((previous) => new Set(previous).add(subject.id));
           onSubjectAdded?.(subject);
@@ -97,7 +111,8 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
     if (!selected.size) return;
     const withLevels = items.map((subject) => (levels[subject.id] ? { ...subject, currentLevel: levels[subject.id] } : subject));
     if (demo) {
-      setPlan(buildDemoPlan(withLevels.filter((subject) => selected.has(subject.id))));
+      setPlan(buildDemoPlan(withLevels.filter((subject) => selected.has(subject.id)), profile));
+      onDatesChange?.({ startDate: form.startDate, examDate: form.examDate });
       setStep(2);
       return;
     }
@@ -105,11 +120,13 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
     try {
       const changes = items.filter((subject) => levels[subject.id] && levels[subject.id] !== subject.currentLevel);
       for (const subject of changes) {
-        await api.updateSubject(subject.id, { name: subject.name, weight: subject.weight, difficulty: subject.difficulty, currentLevel: levels[subject.id] });
+        await api.updateSubject(subject.id, { name: subject.name, weight: subject.weight, difficulty: subject.difficulty, currentLevel: levels[subject.id], targetLevel: subject.targetLevel });
       }
       setPlan(await api.getStudyPlan({ ...form, totalHours: Number(form.totalHours) || profile.dailyHours * profile.weeklyDays }));
+      onDatesChange?.({ startDate: form.startDate, examDate: form.examDate });
       setStep(2);
-    } catch {
+    } catch (error) {
+      window.alert(String(error));
       setGenerating(false);
     }
   };
@@ -179,7 +196,7 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
         <div className="wizard-body scroll-area">
           {step === 0 && <div className="form-stack">
             <div className="form-two"><label>Data da prova<input type="date" value={form.examDate} onChange={(event) => setForm((prev) => ({ ...prev, examDate: event.target.value }))} /></label><label>Início da rota<input type="date" value={form.startDate} onChange={(event) => setForm((prev) => ({ ...prev, startDate: event.target.value }))} /></label></div>
-            <label>Horas líquidas de estudo por dia<input type="number" min="0.5" max="16" step="0.5" value={Math.round(form.totalHours / Math.max(profile.weeklyDays, 1) * 10) / 10} onChange={(event) => setForm((prev) => ({ ...prev, totalHours: Number(event.target.value) * Math.max(profile.weeklyDays, 1) }))} /></label>
+            <label>Horas líquidas de estudo por dia<input type="number" min="0.5" max="24" step="0.5" value={Math.round(form.totalHours / Math.max(profile.weeklyDays, 1) * 10) / 10} onChange={(event) => setForm((prev) => ({ ...prev, totalHours: Math.max(0.5, Math.min(24, Number(event.target.value) || 0.5)) * Math.max(profile.weeklyDays, 1) }))} /></label>
             <p className="form-hint">Você tem <strong>{weeksLeft} semanas</strong>. O motor distribui os blocos priorizando a janela matinal de maior resistência à procrastinação e reserva tempo de revisão nas semanas finais.</p>
           </div>}
 
@@ -188,31 +205,53 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
               <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Adicionar matéria nova à rota — não repita os focos, amplie o ataque…" aria-label="Nome da nova matéria" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addSubject(); } }} />
               <button className="button secondary" onClick={() => void addSubject()} disabled={!draft.trim()}><Plus size={15} /> Adicionar</button>
             </div>
-            <p className="form-hint">Quais disciplinas entram na <strong>fase de ataque</strong>? Elas recebem os blocos principais; o restante fica em manutenção via Project Buffer. Quanto mais matérias entrarem, menos o motor repete os mesmos focos.</p>
+            <p className="form-hint">Quais disciplinas entram na <strong>fase de ataque</strong>? Elas recebem os blocos principais; o restante fica em manutenção via Project Buffer. Remova com <strong>×</strong> as matérias já dominadas (ex.: biologia básica, gramática) — a matriz e o cronograma recalculam na hora. Quanto mais matérias entrarem, menos o motor repete os mesmos focos.</p>
 
             <div className="wizard-focus-area">
               <p className="form-hint"><strong>Área que você quer entrar</strong> — clique num botão para elevar o peso padrão das matérias que sustentam essa carreira. Clicar de novo desativa a ênfase.</p>
-              <div className="focus-area-chips">{FOCUS_AREAS.map((candidate) => <button type="button" key={candidate.id} className={`focus-area-chip ${area === candidate.id ? "active" : ""}`} title={candidate.hint} onClick={() => setArea((prev) => (prev === candidate.id ? null : candidate.id))}><Flag size={13} />{candidate.label}{area === candidate.id ? <em>ênfase</em> : null}</button>)}</div>
+              <div className="focus-area-chips">{FOCUS_AREAS.map((candidate) => <button type="button" key={candidate.id} className={`focus-area-chip ${area === candidate.id ? "active" : ""}`} title={candidate.hint} onClick={() => setArea((prev) => { const next = prev === candidate.id ? null : candidate.id; onAreaChange?.(next); return next; })}><Flag size={13} />{candidate.label}{area === candidate.id ? <em>ênfase</em> : null}</button>)}</div>
             </div>
             <div className="wizard-catalog">
               <div className="catalog-controls">
-                <label className="catalog-track">Vestibular alvo<select value={track} onChange={(event) => { setTrack(event.target.value as ExamTrack); setCatalogChecked(new Set()); }}>{EXAM_TRACKS.map((option) => <option key={option}>{option}</option>)}</select></label>
+                <label className="catalog-track">Vestibular alvo<select value={track} onChange={(event) => { const next = event.target.value as ExamTrack; setTrack(next); setCatalogChecked(new Set()); if (course && course.track !== next) { setCourse(null); onCourseChange?.(null); } }}>{EXAM_TRACKS.map((option) => <option key={option}>{option}</option>)}</select></label>
+                <label className="catalog-track">Curso pretendido<select value={course?.id ?? ""} onChange={(event) => { const found = COURSE_GOALS.find((candidate) => candidate.id === event.target.value) ?? null; setCourse(found); if (found) setTrack(found.track); setCatalogChecked(new Set()); onCourseChange?.(found?.id ?? null); }}><option value="">— sem curso definido —</option>{COURSE_GOALS.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.label} · {candidate.track}</option>)}</select></label>
                 <div className="weight-mode">
                   <span className="weight-mode-label">Pesos</span>
-                  <button type="button" className={`weight-mode-btn ${weightMode === "padrao" ? "active" : ""}`} onClick={() => setWeightMode("padrao")}>Padrão da prova</button>
+                  <button type="button" className={`weight-mode-btn ${weightMode === "padrao" ? "active" : ""}`} onClick={() => setWeightMode("padrao")}>Prioridade do plano</button>
                   <button type="button" className={`weight-mode-btn ${weightMode === "manual" ? "active" : ""}`} onClick={() => setWeightMode("manual")}>Meu peso</button>
                 </div>
               </div>
-              <p className="form-hint">Cada prova já traz suas matérias com o <strong>peso padrão</strong> (a área pode elevá-lo). Em <strong>Meu peso</strong>, ajuste matéria por matéria antes de inserir na rota.</p>
-              <div className="catalog-list" data-testid="catalog-list">{catalogSubjectsForTrack(track).map((entry) => {
+              <p className="form-hint">O peso do plano combina a aderência ao curso e a área de foco; quando o edital oficial informa pesos de ingresso, eles ficam registrados separadamente. Em <strong>Meu peso</strong>, ajuste a prioridade de estudo antes de inserir a matéria.</p>
+              {course && <div className="course-goal" data-testid="course-goal">
+                <div className="course-goal-head"><Flag size={13} /><strong>{course.label}</strong><span>{course.university} · {course.track} · {course.cutoff}</span></div>
+                <p>{course.summary}</p>
+                <div className="course-goal-chips">{course.emphasis.parents.map((parent) => <span key={parent}>{parent}</span>)}<em>prioridade de estudo ×{course.emphasis.multiplier}</em></div>
+                <p className="course-weight-note">Meta sugerida antes da graduação: matérias mais aderentes ao curso começam com alvo intermediário; as demais, básico. Você pode alterar esses alvos na trajetória. Isso é orientação de preparação, não requisito do edital.</p>
+                {course.admissionProfile && <div className="course-admission-profile"><strong>{course.admissionProfile.edition}</strong><span>Matemática, Natureza, Humanas, Linguagens e Redação: peso 1,0 cada. O cálculo de ingresso é igual nas cinco áreas; a prioridade de estudo da rota pode ser diferente.</span><a href={course.admissionProfile.source} target="_blank" rel="noreferrer">Ver termo oficial de adesão</a></div>}
+                <details className="course-kit" data-testid="course-kit">
+                  <summary><Sparkles size={13} /> Kit de domínio — livros, YouTube técnico, dorks e método</summary>
+                  <div className="kit-grid">
+                    <div className="kit-section"><strong>Bibliografia padrão-ouro</strong><ul>{course.books.map((book) => <li key={book.name}><b>{book.name}</b>{book.focus}</li>)}</ul></div>
+                    <div className="kit-section"><strong>Método por matéria</strong><ul>{course.methods.map((method) => <li key={method}>{method}</li>)}</ul></div>
+                    <div className="kit-section"><strong>YouTube técnico · silos</strong><ul>{course.youtube.silos.map((silo) => <li key={silo}>{silo}</li>)}</ul></div>
+                    <div className="kit-section"><strong>Canais de autoridade</strong><ul>{course.youtube.channels.map((channel) => <li key={channel.name}><b>{channel.name}</b>{channel.focus}</li>)}</ul></div>
+                    <div className="kit-section"><strong>Buscas ativas no silo</strong><ul>{course.youtube.searches.map((search) => <li key={search}><code>{search}</code></li>)}</ul></div>
+                    <div className="kit-section"><strong>Plataformas de curso</strong><ul>{course.platforms.map((platform) => <li key={platform.name}><b>{platform.name}</b>{platform.focus}</li>)}</ul></div>
+                    <div className="kit-section"><strong>Dorks de busca (Google)</strong><ul>{course.dorks.map((dork) => <li key={dork.query}><b>{dork.label}</b><code>{dork.query}</code></li>)}</ul></div>
+                  </div>
+                </details>
+              </div>}
+              <div className="catalog-list" data-testid="catalog-list">{catalogSubjectsFor(track, course).map((entry) => {
                 const alreadyIn = items.some((subject) => subject.name === entry.name);
                 const checked = catalogChecked.has(entry.name);
-                const focando = emphasize(activeArea, entry);
-                const weight = catalogWeights[entry.name] ?? areaWeight(activeArea, entry);
+                const focandoCurso = emphasizeCourse(course, entry);
+                const focando = focandoCurso || emphasize(activeArea, entry);
+                const isExtension = extension !== null && entry.group === extension;
+                const weight = catalogWeights[entry.name] ?? courseAreaWeight(course, activeArea, entry);
                 return (
-                  <label className={`catalog-row ${alreadyIn ? "taken" : ""} ${checked ? "checked" : ""} ${focando ? "emphasis" : ""}`} key={entry.name}>
+                  <label className={`catalog-row ${alreadyIn ? "taken" : ""} ${checked ? "checked" : ""} ${focando ? "emphasis" : ""} ${isExtension ? "extension" : ""}`} key={entry.name}>
                     <input type="checkbox" aria-label={`Incluir ${entry.name}`} checked={checked} disabled={alreadyIn} onChange={() => toggleCatalog(entry.name)} />
-                    <span className="catalog-name">{parentArea(entry.name)}<small>{entry.name.indexOf(" · ") === -1 ? CATALOG_GROUP_LABELS[entry.group] : entry.name.slice(entry.name.indexOf(" · ") + 3)} · {CATALOG_GROUP_LABELS[entry.group]}</small>{focando ? <em className="focus-badge">foco maior</em> : null}</span>
+                    <span className="catalog-name">{parentArea(entry.name)}<small>{entry.name.indexOf(" · ") === -1 ? CATALOG_GROUP_LABELS[entry.group] : entry.name.slice(entry.name.indexOf(" · ") + 3)} · {CATALOG_GROUP_LABELS[entry.group]}</small>{focando ? <em className="focus-badge">{focandoCurso ? "meta do curso" : "foco maior"}</em> : null}{isExtension && !focando ? <em className="focus-badge extension">extensão do curso</em> : null}</span>
                     <span className="catalog-difficulty">dif. {entry.difficulty}</span>
                     {entry.books ? <span className="catalog-books" title={entry.books.join(" · ")}><BookOpen size={12} /> {entry.books.length} livro(s)</span> : null}
                     <input type="number" min="1" max="5" step="1" value={weight} aria-label={`Peso de ${entry.name}`} disabled={alreadyIn || weightMode === "padrao"} onChange={(event) => { const value = Math.max(1, Math.min(5, Number(event.target.value) || 1)); setCatalogWeights((prev) => ({ ...prev, [entry.name]: value })); }} />
@@ -222,12 +261,13 @@ export function PlanWizard({ subjects, profile, onClose, demo, onSubjectAdded }:
               <button className="button secondary catalog-insert" onClick={() => void insertCatalog()} disabled={!catalogChecked.size}><Plus size={15} /> Inserir selecionadas ({catalogChecked.size})</button>
             </div>
 
-            <div className="subject-grid" data-testid="subject-grid">{items.map((subject) => <div className="subject-tile-wrap" key={subject.id}><button className={`subject-tile ${selected.has(subject.id) ? "active" : ""}`} onClick={() => toggle(subject.id)}><i style={{ background: color(subject.color) }} />{subject.name.split("·")[0].trim()}<small>peso {subject.weight} · dificuldade {subject.difficulty}{selected.has(subject.id) ? ` · nível ${levels[subject.id] ?? subject.currentLevel}` : ""}</small></button>{selected.has(subject.id) ? <label className="level-picker">de onde você começa?<select aria-label={`Nível de partida de ${subject.name}`} value={levels[subject.id] ?? subject.currentLevel} onChange={(event) => setLevels((prev) => ({ ...prev, [subject.id]: Number(event.target.value) }))}>{[1, 2, 3, 4, 5].map((level) => <option key={level} value={level}>{level} · {{ 1: "do zero", 2: "pouco a percorrer", 3: "razoável", 4: "bom", 5: "pronto" }[level]}</option>)}</select></label> : null}</div>)}</div>
+            <div className="subject-grid" data-testid="subject-grid">{items.map((subject) => <div className="subject-tile-wrap" key={subject.id}><button className={`subject-tile ${selected.has(subject.id) ? "active" : ""}`} onClick={() => toggle(subject.id)}><i style={{ background: color(subject.color) }} />{subject.name.split("·")[0].trim()}<small>peso {subject.weight} · dificuldade {subject.difficulty}{selected.has(subject.id) ? ` · nível ${PROFICIENCY_LEVELS.find((level) => level.value === (levels[subject.id] ?? subject.currentLevel))?.label ?? ""}` : ""}</small></button><button type="button" className="subject-remove" title={`Remover ${subject.name} da matriz`} aria-label={`Remover ${subject.name}`} onClick={() => removeSubject(subject)}><X size={12} /></button>{selected.has(subject.id) ? <label className="level-picker">nível inicial na matéria<select aria-label={`Nível de partida de ${subject.name}`} value={levels[subject.id] ?? subject.currentLevel} onChange={(event) => setLevels((prev) => ({ ...prev, [subject.id]: Number(event.target.value) }))}>{PROFICIENCY_LEVELS.map((level) => <option key={level.value} value={level.value}>{level.value} · {level.label}</option>)}</select></label> : null}</div>)}</div>
             {!items.length && <p className="cogn-empty">Adicione matérias na aba Matriz antes de montar a rota.</p>}
           </div>}
 
           {step === 2 && plan && <div className="form-stack">
             {plan.riskName && <div className="cog-alert warning"><AlertTriangle size={16} /><div><strong>Matéria de maior risco: {plan.riskName.split("·")[0].trim()}.</strong><span>Recebe a primeira janela matinal — o período de menor resistência à procrastinação.</span></div></div>}
+            {course && <p className="course-meta-line" data-testid="course-meta-line"><Flag size={13} /> Meta: {course.label} · {course.university} · {course.cutoff}</p>}
             <div className="focus-summary-row"><div><strong>{plan.weeks}</strong><span>semanas até a prova</span></div><div><strong>{plan.days.length}</strong><span>dias na rota</span></div><div><strong>{Math.max(1, plan.days[0]?.focusSubjects.length ?? 0)}</strong><span>focos por dia</span></div></div>
             <div className="wizard-tabs"><button className={`tab-chip ${planTab === "rota" ? "active" : ""}`} onClick={() => setPlanTab("rota")}><CalendarCheck size={14} /> Rota</button><button className={`tab-chip ${planTab === "tarefas" ? "active" : ""}`} onClick={() => setPlanTab("tarefas")}><ListChecks size={14} /> Lista de tarefas ({doneCount}/{tasks.length + weeklyTasks.length})</button></div>
             {planTab === "rota" && <><div className="plan-phases" data-testid="plan-phases">{plan.phases.map((phase) => <div className={`plan-phase ${phase.mode}`} key={phase.mode}><span className="plan-phase-tag">{phase.title}</span><strong>{phase.routine}</strong><small>{phase.fromWeek === phase.toWeek ? `Semana ${phase.fromWeek}` : `Semanas ${phase.fromWeek}–${phase.toWeek}`} · {dayLabel(phase.startDate)} a {dayLabel(phase.endDate)} · {phase.minutesPerWeek} min/semana</small><em>{phase.detail}</em></div>)}</div><div className="plan-days" data-testid="plan-days">{plan.days.slice(0, 7).map((day: PlanDay) => <div className="plan-day" key={day.date}><span className="plan-day-date">{dayLabel(day.date)}</span><span className="plan-day-name">{day.weekdayLabel}</span><div className="plan-day-focus">{day.focusSubjects.map((focus: PlanFocus) => <span className="plan-chip" key={`${day.date}-${focus.subjectId}`} title={booksForName(focus.subjectName)?.join(" · ") ?? focus.subjectName}><i style={{ background: color(focus.color) }} />{focus.subjectName.split("·")[0].trim()}<b>{focus.minutes}m</b><em>{focus.slot}</em></span>)}</div></div>)}</div>

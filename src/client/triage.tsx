@@ -44,7 +44,7 @@ export function RescheduleTriagePanel({ demo }: { demo: boolean }) {
   const hasDebt = Boolean(plan && plan.items.length > 0);
 
   return (
-    <section className="card">
+    <section className="card table-card">
       <div className="section-heading">
         <div><p className="eyebrow">Gestão Adaptativa de Cronograma · CCPM</p><h2>Triage WBS diário</h2></div>
         <button className="button" onClick={runReschedule} disabled={running}>{running ? <TimerReset size={16} /> : <CalendarCheck size={16} />} Reagendar com buffer</button>

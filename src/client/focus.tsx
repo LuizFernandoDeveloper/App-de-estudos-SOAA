@@ -131,7 +131,7 @@ type SessionDraft = {
   interrupts: number;
 };
 
-export function FocusTimerView({ subjects, materials, demo }: { subjects: Subject[]; materials: StudyMaterial[]; demo: boolean }) {
+export function FocusTimerView({ subjects, materials, demo, preset, onPresetConsumed }: { subjects: Subject[]; materials: StudyMaterial[]; demo: boolean; preset?: { subjectId: number; minutes: number | null } | null; onPresetConsumed?: () => void }) {
   const [form, setForm] = useState<SetupForm>(emptySetup(30));
   const [setupOpen, setSetupOpen] = useState(false);
   const [active, setActive] = useState<SessionDraft | null>(null);
@@ -158,7 +158,7 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
       return;
     }
     let cancelled = false;
-    api.listFocusSessions().then((data) => { if (!cancelled) setSessions(data); }).catch(() => void 0);
+    api.listFocusSessions().then((data) => { if (!cancelled) setSessions(data.filter((session) => session.focusMode !== "pomodoro")); }).catch(() => void 0);
     api.listBrainDumps().then((data) => { if (!cancelled) setDumps(data); }).catch(() => void 0);
     return () => { cancelled = true; };
   }, [demo]);
@@ -183,6 +183,20 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
     setForm((prev) => ({ ...emptySetup(next), subjectId }));
   };
 
+  /* Deep-link da Central de sinergia: abre o setup já com a matéria e o tempo sugeridos. */
+  useEffect(() => {
+    if (!preset) return;
+    const subject = subjects.find((entry) => entry.id === preset.subjectId);
+    if (!subject) return;
+    const presetMinutes = preset.minutes;
+    selectSubject(subject.id);
+    if (presetMinutes) setForm((prev) => ({ ...prev, plannedMinutes: presetMinutes }));
+    setSetupOpen(true);
+    setSummary(null);
+    onPresetConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset]);
+
   const startSession = () => {
     if (!form.subjectId) return;
     const subject = subjects.find((s) => s.id === form.subjectId);
@@ -198,7 +212,7 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
       pageStart: form.pageStart ? Number(form.pageStart) : null,
       pageEnd: form.pageEnd ? Number(form.pageEnd) : null,
       plannedMinutes: Math.max(1, form.plannedMinutes),
-      startedAt: new Date().toISOString().slice(0, 10),
+      startedAt: new Date().toISOString(),
       elapsedSeconds: 0,
       interrupts: 0
     });
@@ -252,6 +266,7 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
     if (demo) {
       const localSubject = active.subject;
       const elapsedMinutes = Math.min(active.plannedMinutes, Math.round(active.elapsedSeconds / 60) || 1);
+      const grossMinutes = Math.max(elapsedMinutes, Math.min(1_440, Math.round((Date.now() - Date.parse(active.startedAt)) / 60_000)));
       const rate = Math.min(100, Math.max(10, Math.round(active.elapsedSeconds / Math.max(1, active.plannedMinutes * 60) * 100)));
       const record: FocusSession = {
         id: Math.max(0, ...sessions.map((s) => s.id)) + 1,
@@ -266,6 +281,7 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
         pageEnd: active.pageEnd,
         plannedMinutes: active.plannedMinutes,
         elapsedMinutes,
+        grossMinutes,
         interrupts: active.interrupts,
         completionRate: rate,
         zone: rate >= 100 ? "baixa" : rate >= 60 ? "media" : "alta",
@@ -302,15 +318,16 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
         pageEnd: active.pageEnd,
         plannedMinutes: active.plannedMinutes,
         elapsedMinutes: Math.min(active.plannedMinutes, Math.round(active.elapsedSeconds / 60) || 1),
+        grossMinutes: Math.max(Math.min(1_440, Math.round((Date.now() - Date.parse(active.startedAt)) / 60_000)), Math.min(active.plannedMinutes, Math.round(active.elapsedSeconds / 60) || 1)),
         interrupts: active.interrupts,
         exitReason,
         completionPercentage: mastery,
         startedAt: active.startedAt
       };
       try {
-        const next = await api.completeFocusSession(input);
+        const next = await api.completeFocusSession({ ...input, focusMode: "deep_work" });
         setSummary(next);
-        setSessions(await api.listFocusSessions());
+        setSessions((await api.listFocusSessions()).filter((session) => session.focusMode !== "pomodoro"));
         api.getFocusTimebox(active.subject.id)
           .then((data) => setSuggestions((prev) => [...prev.filter((s) => s.subjectId !== active.subject.id), data]))
           .catch(() => void 0);
@@ -453,7 +470,7 @@ export function FocusTimerView({ subjects, materials, demo }: { subjects: Subjec
               </div>
               <div className="field-row">
                 <label className="field-label">Tempo do bloco — <strong>{form.plannedMinutes} min</strong></label>
-                <input className="range" type="range" min={15} max={120} step={5} value={Math.min(120, Math.max(15, form.plannedMinutes))} onChange={(event) => setForm((prev) => ({ ...prev, plannedMinutes: Number(event.target.value) }))} />
+                <input className="range" type="range" min={15} max={240} step={5} value={Math.min(240, Math.max(15, form.plannedMinutes))} onChange={(event) => setForm((prev) => ({ ...prev, plannedMinutes: Number(event.target.value) }))} />
               </div>
               <button className="button primary full" onClick={startSession}><Play size={17} /> Iniciar timebox de {form.plannedMinutes} min</button>
             </div>

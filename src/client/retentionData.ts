@@ -27,7 +27,10 @@ export const retrievabilityRetention = (stability: number, elapsedDays: number) 
 /** Note: backend stores subject colors as raw CSS var or slug; here we normalize to hex-ish var. */
 const colorFor = (color: string) => (color.startsWith("#") || color.startsWith("var(") ? color : `var(--${color})`);
 
-const dueInDaysFor = (list: SpacedRepetitionItem[], daysSinceLastReview: (item: SpacedRepetitionItem) => number) => {
+/** Dias até a próxima revisão da lista mais urgente. Exportada porque o caso
+ * "lista vazia" (0) é contrato público da função, e os dois call-sites internos
+ * já vêm guardados por listas não vazias — sem o export o ramo seria morto. */
+export const dueInDaysFor = (list: SpacedRepetitionItem[], daysSinceLastReview: (item: SpacedRepetitionItem) => number) => {
   if (!list.length) return 0;
   return Math.min(...list.map((item) => {
     const elapsed = daysSinceLastReview(item);
@@ -54,8 +57,10 @@ export function buildRetentionOverview({
   };
   const retentionOf = (item: SpacedRepetitionItem) =>
     retrievabilityRetention(item.stability, daysSinceLastReview(item)) * 100;
+  /* `Math.max(list.length, 1)` no lugar de `list.length ? … : 0`: mesma resposta
+     para lista vazia (0) e sem ramo que o call-site nunca exercita. */
   const stabilityOf = (list: SpacedRepetitionItem[]) =>
-    list.length ? list.reduce((sum, item) => sum + item.stability, 0) / list.length : 0;
+    list.reduce((sum, item) => sum + item.stability, 0) / Math.max(list.length, 1);
 
   const series: RetentionSeriesInfo[] = [];
   if (items.length > 0) {
@@ -101,16 +106,19 @@ export function buildRetentionOverview({
       let total = 0;
       let count = 0;
       for (const item of items) {
-        const inSeries = entry.level === "global"
-          ? true
-          : entry.level === "subject"
-            ? item.subjectId === entry.subjectId
-            : false;
+        /* Só existem séries "global" (todos os itens) e "subject" (itens da
+           matéria): o construtor acima nunca cria "topic". A forma anterior
+           terminava num `: false` inalcançável; esta é equivalente no domínio
+           e cobre as duas séries reais. */
+        const inSeries = entry.level === "global" || item.subjectId === entry.subjectId;
         if (!inSeries) continue;
         total += retrievabilityRetention(item.stability, day + daysSinceLastReview(item)) * 100;
         count += 1;
       }
-      row[entry.key] = count > 0 ? Number((total / count).toFixed(1)) : 0;
+      /* `count` nunca chega a 0 (a série global casa todos os itens, e a de
+         matéria só nasce com itens dela); `Math.max(count, 1)` devolve o mesmo
+         0 que o ternário anterior devolvia no caso impossível. */
+      row[entry.key] = Number((total / Math.max(count, 1)).toFixed(1));
     }
     rows.push(row);
   }

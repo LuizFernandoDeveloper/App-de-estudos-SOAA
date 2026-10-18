@@ -4,6 +4,7 @@ import type {
   BrainDumpLogInput,
   BufferAllocation,
   ConsolidatedPerformanceReport,
+  CourseWeightProfileInput,
   DashboardData,
   DayAllocation,
   DayAllocationInput,
@@ -55,6 +56,9 @@ export interface ProfileInput {
   startDate?: string | null;
   examDate?: string | null;
   studyDays: number[];
+  preferredCourse?: string | null;
+  focusArea?: string | null;
+  courseWeights?: CourseWeightProfileInput | null;
 }
 
 export interface MaterialInput {
@@ -118,6 +122,7 @@ export const api = {
   deleteDayAllocation: (subjectId: number) =>
     invoke<DayAllocation[]>("delete_day_allocation", { subjectId }),
   listFocusSessions: () => invoke<FocusSession[]>("list_focus_sessions"),
+  listPomodoroSessions: () => invoke<FocusSession[]>("list_pomodoro_sessions"),
   completeFocusSession: (input: FocusSessionInput) =>
     invoke<SessionSummary>("complete_focus_session", { input }),
   getFocusTimebox: (subjectId: number) =>
@@ -142,6 +147,8 @@ export const api = {
     invoke<RetentionOverview>("get_retention_overview", { horizonDays: horizonDays ?? null }),
   getRetentionCurve: (itemId: number, horizonDays?: number) =>
     invoke<RetentionCurve | null>("get_retention_curve", { itemId, horizonDays: horizonDays ?? null }),
+  getRetentionCurveGlobal: (horizonDays?: number) =>
+    invoke<RetentionCurve>("get_retention_curve_global", { horizonDays: horizonDays ?? null }),
   getDashboard: () => invoke<DashboardData>("get_dashboard"),
   getPerformanceLivestream: () => invoke<RetentionLiveStream>("get_performance_livestream"),
   getConsolidatedReport: () => invoke<ConsolidatedPerformanceReport>("get_consolidated_report")

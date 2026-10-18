@@ -165,6 +165,10 @@ pub struct Profile {
     pub start_date: Option<String>,
     pub exam_date: Option<String>,
     pub study_days: Vec<i64>,
+    /// Meta de estudo por curso preferido (id do catálogo `COURSE_GOALS`).
+    pub preferred_course: Option<String>,
+    /// Área de ênfase escolhida (id de `FOCUS_AREAS` no catálogo do cliente).
+    pub focus_area: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +183,33 @@ pub struct ProfileInput {
     pub exam_date: Option<String>,
     #[serde(default)]
     pub study_days: Vec<i64>,
+    #[serde(default)]
+    pub preferred_course: Option<String>,
+    #[serde(default)]
+    pub focus_area: Option<String>,
+    #[serde(default)]
+    pub course_weights: Option<CourseWeightProfileInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CourseWeightProfileInput {
+    pub course_id: String,
+    pub institution: String,
+    pub exam_track: String,
+    pub source_edition: Option<String>,
+    pub source_url: Option<String>,
+    pub subjects: Vec<CourseSubjectWeightInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CourseSubjectWeightInput {
+    pub subject_name: String,
+    pub preparation_weight: f64,
+    pub applied_weight: i64,
+    pub admission_weight: Option<f64>,
+    pub target_level: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,6 +337,75 @@ pub enum FocusZone {
     Alta,
 }
 
+/// Tipo da sessão de foco. Os blocos anteriores à migração continuam como
+/// `DeepWork`; Pomodoros ficam identificáveis sem misturar a calibração de timebox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusMode {
+    DeepWork,
+    Pomodoro,
+}
+
+/// Tipo de esforço mental para comparar desempenho de Pomodoros por matéria.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CognitiveMode {
+    General,
+    ProblemSolving,
+    Retrieval,
+    ConceptualReading,
+    Writing,
+    MixedQuestions,
+}
+
+impl Default for CognitiveMode {
+    fn default() -> Self { Self::General }
+}
+
+impl CognitiveMode {
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "problem_solving" => Self::ProblemSolving,
+            "retrieval" => Self::Retrieval,
+            "conceptual_reading" => Self::ConceptualReading,
+            "writing" => Self::Writing,
+            "mixed_questions" => Self::MixedQuestions,
+            _ => Self::General,
+        }
+    }
+
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::ProblemSolving => "problem_solving",
+            Self::Retrieval => "retrieval",
+            Self::ConceptualReading => "conceptual_reading",
+            Self::Writing => "writing",
+            Self::MixedQuestions => "mixed_questions",
+        }
+    }
+}
+
+impl Default for FocusMode {
+    fn default() -> Self { Self::DeepWork }
+}
+
+impl FocusMode {
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "pomodoro" => Self::Pomodoro,
+            _ => Self::DeepWork,
+        }
+    }
+
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::DeepWork => "deep_work",
+            Self::Pomodoro => "pomodoro",
+        }
+    }
+}
+
 impl FocusZone {
     pub fn from_completion_rate(completion_rate: f64) -> Self {
         if completion_rate >= 1.0 {
@@ -341,12 +441,18 @@ impl FocusZone {
 pub struct FocusSessionInput {
     pub subject_id: i64,
     pub material_id: Option<i64>,
+    #[serde(default)]
+    pub focus_mode: FocusMode,
+    #[serde(default)]
+    pub cognitive_mode: CognitiveMode,
     pub goal_type: String,
     pub goal_text: Option<String>,
     pub page_start: Option<i64>,
     pub page_end: Option<i64>,
     pub planned_minutes: i64,
     pub elapsed_minutes: i64,
+    #[serde(default)]
+    pub gross_minutes: Option<i64>,
     pub interrupts: i64,
     pub exit_reason: Option<String>,
     pub completion_percentage: Option<f64>,
@@ -362,12 +468,15 @@ pub struct FocusSession {
     pub color: String,
     pub material_id: Option<i64>,
     pub material_title: Option<String>,
+    pub focus_mode: FocusMode,
+    pub cognitive_mode: CognitiveMode,
     pub goal_type: String,
     pub goal_text: Option<String>,
     pub page_start: Option<i64>,
     pub page_end: Option<i64>,
     pub planned_minutes: i64,
     pub elapsed_minutes: i64,
+    pub gross_minutes: Option<i64>,
     pub interrupts: i64,
     pub completion_rate: f64,
     /// Zona de foco calculada pelo backend a partir do completion_rate.

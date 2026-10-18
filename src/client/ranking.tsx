@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import type { DayAllocation, SubjectRanking } from "../shared/types";
+import type { SynergyAttack, SynergyRow } from "./synergy";
 
 const HEX: Record<string, string> = {
   indigo: "#818cf8", violet: "#a78bfa", cyan: "#22d3ee", pink: "#f472b6",
@@ -31,40 +32,51 @@ const ZONES = [
   { id: "green", label: "Verde", hint: "Estável — risco baixo, siga o plano normal." }
 ] as const;
 type ZoneId = (typeof ZONES)[number]["id"];
-const zoneOf = (score: number): ZoneId => (score >= 7 ? "red" : score >= 5 ? "amber" : "green");
-const zoneIndex = (score: number) => (score >= 7 ? 0 : score >= 5 ? 1 : 2);
+const zoneOf = (score: number): ZoneId => (score >= 55 ? "red" : score >= 30 ? "amber" : "green");
+const zoneIndex = (score: number) => (score >= 55 ? 0 : score >= 30 ? 1 : 2);
 const ZONE_LABEL: Record<ZoneId, string> = { red: "Vermelha", amber: "Amarela", green: "Verde" };
 
-export function RankingView({ ranking, allocations, onChanged, demo }: { ranking: SubjectRanking[]; allocations: DayAllocation[]; onChanged: () => Promise<void>; demo: boolean }) {
+export function RankingView({ ranking, allocations, synergyRows = [], synergyAttacks = [], onAttack = () => void 0, onChanged, demo }: { ranking: SubjectRanking[]; allocations: DayAllocation[]; synergyRows?: SynergyRow[]; synergyAttacks?: SynergyAttack[]; onAttack?: (attack: SynergyAttack) => void; onChanged: () => Promise<void>; demo: boolean }) {
   const [managing, setManaging] = useState<SubjectRanking | null>(null);
+  const synergyById = useMemo(() => new Map(synergyRows.map((row) => [row.subjectId, row])), [synergyRows]);
   const display = useMemo(
     () => [...ranking]
       .sort((a, b) => {
-        const zoneDiff = zoneIndex(a.priorityScore) - zoneIndex(b.priorityScore);
+        const scoreA = synergyById.get(a.id)?.score ?? Math.round(a.priorityScore / 9 * 30);
+        const scoreB = synergyById.get(b.id)?.score ?? Math.round(b.priorityScore / 9 * 30);
+        const zoneDiff = zoneIndex(scoreA) - zoneIndex(scoreB);
         if (zoneDiff !== 0) return zoneDiff;
-        return b.priorityScore - a.priorityScore || a.name.localeCompare(b.name);
+        return scoreB - scoreA || b.priorityScore - a.priorityScore || a.name.localeCompare(b.name);
       })
-      .map((row, index) => ({ ...row, rank: index + 1 })),
-    [ranking]
+      .map((row, index) => ({ ...row, rank: index + 1, synergyScore: synergyById.get(row.id)?.score ?? Math.round(row.priorityScore / 9 * 30) })),
+    [ranking, synergyById]
   );
   const top = display[0];
+  const redRows = display.filter((row) => zoneOf(row.synergyScore) === "red");
+  const amberRows = display.filter((row) => zoneOf(row.synergyScore) === "amber");
+  const greenRows = display.filter((row) => zoneOf(row.synergyScore) === "green");
   const fallen = display.filter((row) => row.movement === "down");
   const risen = display.filter((row) => row.movement === "up");
   const bySubject = new Map(allocations.map((a) => [a.subjectId, a]));
   return <div className="page-stack">
-    <section className="card ranking-hero"><div><p className="eyebrow">Prioridade calculada ao vivo</p><h2>Qual matéria merece atenção hoje?</h2><p>O score combina peso estratégico (IP), déficit contra sua meta de acerto, ritmo recente de questões e a tendência dos últimos 7 dias. A setinha mostra se a matéria <strong className="up-text">subiu</strong> ou <strong className="down-text">caiu</strong> em relação à janela anterior. Clique em <strong>Gerenciar</strong> para alocar a matéria a um dia da semana (reforço).</p></div><Crown size={30} /></section>
+    <section className="card ranking-hero"><div><p className="eyebrow">Prioridade calculada ao vivo</p><h2>Qual matéria merece atenção hoje?</h2><p>O índice de sinergia cruza prioridade, acertos, retenção FSRS, cobertura do edital, foco Pomodoro/Deep Work e meta do curso. <strong>Vermelha</strong> exige atenção primeiro; amarela pede reforço próximo; verde segue o plano. A seta mostra a tendência do ranking. Use <strong>Agir</strong> para abrir a tarefa que ajuda a recuperar a matéria.</p></div><Crown size={30} /></section>
     {ranking.length ? <section className="rank-callouts">
-      {top && <div className="rank-focus"><Crown size={18} /><div><strong>Foco do reforço: {top.name.split("·")[0].trim()}</strong><span>Maior prioridade ({top.priorityScore} pts) — melhor candidato para um dia calmo de revisão e resolução.</span></div></div>}
+      {top && <div className="rank-focus"><Crown size={18} /><div><strong>Foco do reforço: {top.name.split("·")[0].trim()}</strong><span>Maior índice de sinergia ({top.synergyScore}/100) — comece pela matéria que acumula mais sinais de atenção.</span></div></div>}
+      {redRows.length > 0 && <div className="rank-warn"><span className="rank-alert-dot" /><div><strong>{redRows.length} matéria{redRows.length > 1 ? "s" : ""} em zona vermelha</strong><span>{redRows.map((row) => row.name.split("·")[0].trim()).join(", ")} — priorize hoje.</span></div></div>}
+      {amberRows.length > 0 && <div className="rank-focus"><span className="rank-alert-dot amber" /><div><strong>{amberRows.length} em zona amarela</strong><span>Reforce no próximo ciclo de estudo.</span></div></div>}
+      {greenRows.length > 0 && <div className="rank-ok"><span className="rank-alert-dot green" /><div><strong>{greenRows.length} em zona verde</strong><span>Estáveis com os sinais registrados.</span></div></div>}
       {fallen.length > 0 && <div className="rank-warn"><ArrowDown size={18} /><div><strong>{fallen.length} matéria{fallen.length > 1 ? "s" : ""} em queda</strong><span>{fallen.map((row) => row.name.split("·")[0].trim()).join(", ")} — prioridade acima da semana anterior.</span></div></div>}
       {risen.length > 0 && <div className="rank-ok"><ArrowUp size={18} /><div><strong>{risen.length} matéria{risen.length > 1 ? "s" : ""} subiram</strong><span>{risen.map((row) => row.name.split("·")[0].trim()).join(", ")} — estabilidade melhorou na janela recente.</span></div></div>}
     </section> : null}
     <section className="card table-card">
       {ranking.length ? <div className="section-heading"><div><p className="eyebrow">Ordem de ataque</p><h2>Ranking de prioridade</h2></div></div> : null}
-      {ranking.length ? <div className="zone-legend">{ZONES.map((zone) => <span key={zone.id} className={`zone-chip ${zone.id}`}><i />{zone.label}<em>{zone.hint}</em></span>)}</div> : null}
-      {ranking.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Matéria</th><th>Movimento</th><th>Zona</th><th>Prioridade</th><th>Acerto</th><th>Reforço</th><th></th></tr></thead><tbody>{display.map((row) => {
-        const zone = zoneOf(row.priorityScore);
+      {ranking.length ? <div className="zone-legend">{ZONES.map((zone) => <span key={zone.id} className={`zone-chip ${zone.id}`}><i />{zone.label}<em>{zone.id === "red" ? "≥55 — atenção imediata." : zone.id === "amber" ? "30–54 — reforce em breve." : "<30 — mantenha o plano."}</em></span>)}</div> : null}
+      {ranking.length ? <div className="table-wrap"><table><thead><tr><th>#</th><th>Matéria</th><th>Movimento</th><th>Zona</th><th>Sinergia</th><th>Prioridade / 10</th><th>Acerto</th><th>Reforço</th><th></th></tr></thead><tbody>{display.map((row) => {
+        const zone = zoneOf(row.synergyScore);
         const allocation = bySubject.get(row.id);
-        return <tr key={row.id} className={`zone-row ${zone}`}><td><span className="rank-position">{row.rank}</span></td><td><span className="subject-cell"><span className="color-dot" style={{ background: colorOf(row.color) }} />{row.name}</span></td><td><MovementBadge movement={row.movement} /></td><td><span className={`zone-pill ${zone}`} title={ZONE_LABEL[zone]}><i />{ZONE_LABEL[zone]}</span></td><td><div className="priority-cell"><strong>{row.priorityScore}</strong><div className="progress-inline"><span style={{ width: `${Math.min(100, row.priorityScore / 9 * 100)}%`, background: row.priorityScore >= 7 ? "#ff5a71" : row.priorityScore >= 5 ? "#ffca76" : "#34d399" }} /></div></div></td><td><strong className={row.accuracy >= row.goalAccuracy ? "good" : "needs-work"}>{row.accuracy}%</strong></td><td>{allocation ? <button className="alloc-badge" title={allocation.note ?? ""} onClick={() => setManaging(row)}><CalendarCheck size={13} /> {DAYS[allocation.weekday]} · {minutes(allocation.minutes)}</button> : <span className="muted-text">—</span>}</td><td><button className="icon-button" title="Alocar reforço ou gerenciar" onClick={() => setManaging(row)}><Pencil size={15} /></button></td></tr>;
+        const attack = synergyAttacks.find((item) => item.subjectId === row.id);
+        const priorityColor = row.priorityScore >= 7 ? "#ff5a71" : row.priorityScore >= 5 ? "#ffca76" : "#34d399";
+        return <tr key={row.id} className={`zone-row ${zone}`}><td><span className="rank-position">{row.rank}</span></td><td><span className="subject-cell"><span className="color-dot" style={{ background: colorOf(row.color) }} />{row.name}</span></td><td><MovementBadge movement={row.movement} /></td><td><span className={`zone-pill ${zone}`} title={ZONE_LABEL[zone]}><i />{ZONE_LABEL[zone]}</span></td><td><div className="priority-cell synergy-score-cell"><strong>{row.synergyScore}</strong><small>/100</small><div className="progress-inline"><span style={{ width: `${row.synergyScore}%`, background: zone === "red" ? "#ff5a71" : zone === "amber" ? "#ffca76" : "#34d399" }} /></div></div></td><td><div className="priority-cell"><strong>{row.priorityScore}</strong><div className="progress-inline"><span style={{ width: `${Math.min(100, row.priorityScore / 9 * 100)}%`, background: priorityColor }} /></div></div></td><td><strong className={row.accuracy >= row.goalAccuracy ? "good" : "needs-work"}>{row.accuracy}%</strong></td><td>{allocation ? <button className="alloc-badge" title={allocation.note ?? ""} onClick={() => setManaging(row)}><CalendarCheck size={13} /> {DAYS[allocation.weekday]} · {minutes(allocation.minutes)}</button> : <span className="muted-text">—</span>}</td><td className="rank-actions">{attack && <button className={`button rank-attack ${zone === "red" ? "urgent" : ""}`} title={attack.detail} onClick={() => onAttack(attack)}><Sparkles size={14} /> Agir</button>}<button className="icon-button" title="Alocar reforço ou gerenciar" onClick={() => setManaging(row)}><Pencil size={15} /></button></td></tr>;
       })}</tbody></table></div> : <div className="empty-state"><div><Crown size={24} /></div><p>Cadastre matérias e registre blocos de questões — o ranking de prioridade aparece aqui com as setinhas de subida e queda.</p></div>}
     </section>
     {managing && <AllocationModal subject={managing} allocation={bySubject.get(managing.id)} onClose={() => setManaging(null)} onSaved={async () => { await onChanged(); setManaging(null); }} demo={demo} />}

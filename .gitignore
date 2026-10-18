@@ -5,6 +5,8 @@ release/
 target/
 src-tauri/target/
 coverage/
+.cov-*/
+*.log
 __pycache__/
 *.db
 *.db-shm

@@ -1,4 +1,4 @@
-export type ExamTrack = "Ensino Médio" | "ENEM" | "ITA" | "IME" | "Personalizado";
+export type ExamTrack = "Ensino Médio" | "ENEM" | "CEFET-MG" | "IFMG" | "PUC Minas (Betim)" | "FUVEST" | "UNICAMP" | "ITA" | "IME" | "QVest / outro" | "Internacional" | "Personalizado";
 export type MaterialStatus = "pendente" | "em_andamento" | "concluido";
 export type TopicStatus = MaterialStatus;
 export type PerformanceGranularity = "day" | "week" | "month" | "year";
@@ -102,6 +102,26 @@ export interface Profile {
   startDate: string | null;
   examDate: string | null;
   studyDays: number[];
+  /** Meta de estudo por curso preferido (id do catálogo `COURSE_GOALS`). */
+  preferredCourse: string | null;
+  /** Área de ênfase escolhida na rota (id do catálogo `FOCUS_AREAS`). */
+  focusArea: string | null;
+}
+
+/** Pesos de preparação e de ingresso salvos para a combinação curso + prova. */
+export interface CourseWeightProfileInput {
+  courseId: string;
+  institution: string;
+  examTrack: ExamTrack;
+  sourceEdition: string | null;
+  sourceUrl: string | null;
+  subjects: Array<{
+    subjectName: string;
+    preparationWeight: number;
+    appliedWeight: number;
+    admissionWeight: number | null;
+    targetLevel: number;
+  }>;
 }
 
 export interface SubjectPerformance {
@@ -176,6 +196,8 @@ export interface DayAllocationInput {
 }
 
 export type FocusGoalType = "paginas" | "topicos" | "exercicios";
+export type FocusMode = "deep_work" | "pomodoro";
+export type CognitiveMode = "general" | "problem_solving" | "retrieval" | "conceptual_reading" | "writing" | "mixed_questions";
 export type EarlyExitReason =
   | "fadiga_metabolica"
   | "distracao_externa"
@@ -188,12 +210,18 @@ export type FocusZone = "alta" | "media" | "baixa";
 export interface FocusSessionInput {
   subjectId: number;
   materialId: number | null;
+  /** Omissão mantém compatibilidade com sessões antigas e chamadas de deep work. */
+  focusMode?: FocusMode;
+  /** Tipo de esforço mental do ciclo, para comparar rendimento por matéria. */
+  cognitiveMode?: CognitiveMode;
   goalType: FocusGoalType;
   goalText: string | null;
   pageStart: number | null;
   pageEnd: number | null;
   plannedMinutes: number;
   elapsedMinutes: number;
+  /** Janela total entre início e encerramento, incluindo pausas do cronômetro. */
+  grossMinutes?: number | null;
   interrupts: number;
   exitReason: EarlyExitReason | null;
   completionPercentage: number | null;
@@ -207,12 +235,18 @@ export interface FocusSession {
   color: string;
   materialId: number | null;
   materialTitle: string | null;
+  /** Sessão adaptativa tradicional ou ciclo Pomodoro persistido no SQLite. */
+  focusMode?: FocusMode;
+  /** Esforço mental escolhido para o ciclo. Sessões antigas são `general`. */
+  cognitiveMode?: CognitiveMode;
   goalType: FocusGoalType;
   goalText: string | null;
   pageStart: number | null;
   pageEnd: number | null;
   plannedMinutes: number;
   elapsedMinutes: number;
+  /** Janela total entre início e encerramento; legado sem registro retorna null. */
+  grossMinutes?: number | null;
   interrupts: number;
   completionRate: number;
   /** Zona de dificuldade de foco calculada no backend. */

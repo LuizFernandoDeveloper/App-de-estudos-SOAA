@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::Path, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::Mutex,
+};
 
 use rusqlite::{params, params_from_iter, Connection, Result as SqlResult, Row};
 
@@ -10,11 +15,12 @@ use crate::scheduler::{
 use crate::models::{
     BrainDumpLog, BrainDumpLogInput, BufferAllocation, ConsolidatedPerformanceReport,
     ConsolidatedPerformanceRow, ConsolidatedPerformanceTotals, DailyPerformance, DashboardData,
-    DayAllocation, DayAllocationInput, FocusOverloadPoint, FocusSession, FocusSessionInput,
+    CognitiveMode, DayAllocation, DayAllocationInput, FocusMode, FocusOverloadPoint, FocusSession, FocusSessionInput,
     FocusZone, FsrsReview, LearningSpeed, MaterialInput, MaterialProgress, MaterialReminder,
     MaterialStrategy, MemoryDecayProjection, MemoryPoint, PerformanceLiveStream,
     PerformanceLiveTick, PerformancePoint, PlanDay, PlanFocus,
-    PlanInput, PlanPhase, PlanResponse, Profile, ProfileInput, QuestionProgress, QuestionResult,
+    PlanInput, PlanPhase, PlanResponse, Profile, ProfileInput, CourseWeightProfileInput,
+    QuestionProgress, QuestionResult,
     QuestionResultInput, RescheduleItem, ReschedulePlan, RetentionCurve, RetentionCurvePoint,
     RetentionOverview, RetentionSeriesInfo, SessionSummary, SpacedRepetitionItem, StrategyMatch,
     StudyMaterial, Subject, SubjectAccuracyPoint, SubjectPerformance, SubjectRanking,
@@ -22,6 +28,7 @@ use crate::models::{
 };
 
 pub const DEFAULT_USER_ID: i64 = 1;
+const DATABASE_SCHEMA_VERSION: i64 = 4;
 
 pub struct AppState {
     pub connection: Mutex<Connection>,
@@ -29,15 +36,64 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(path: &Path) -> SqlResult<Self> {
+        let existing_database = path.exists();
         let mut connection = Connection::open(path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
-        connection.execute_batch(SCHEMA)?;
-        migrate(&connection)?;
-        seed(&mut connection)?;
+
+        let schema_version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if existing_database && schema_version < DATABASE_SCHEMA_VERSION {
+            connection = backup_before_migration(connection, path, schema_version)?;
+            connection.pragma_update(None, "foreign_keys", "ON")?;
+        }
+
+        // A criação de tabelas, alterações do esquema e seeds ocorrem na mesma
+        // transação: uma falha não deixa o banco parcialmente migrado.
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(SCHEMA)?;
+        migrate(&transaction)?;
+        seed(&transaction)?;
+        transaction.pragma_update(None, "user_version", DATABASE_SCHEMA_VERSION)?;
+        transaction.commit()?;
+
         Ok(Self { connection: Mutex::new(connection) })
     }
 }
 
+fn backup_before_migration(connection: Connection, path: &Path, version: i64) -> SqlResult<Connection> {
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S-%f");
+    let backup_path = path.with_file_name(format!("soaa.pre-v{version}.{stamp}.db"));
+    // Checkpoint first so a WAL-backed database is self-contained in its main
+    // file, then release SQLite's Windows file handle before copying it.
+    let (busy, _, _): (i64, i64, i64) = connection.query_row(
+        "PRAGMA wal_checkpoint(FULL)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if busy != 0 {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("A cópia de segurança aguardou um checkpoint WAL ocupado.".into()),
+        ));
+    }
+    connection.close().map_err(|(_, error)| error)?;
+    if let Err(error) = fs::copy(path, &backup_path) {
+        // The migration itself remains atomic below. A denied backup path must
+        // not prevent the app from opening a writable database; surface the
+        // missing snapshot in logs and let the transaction decide safely.
+        eprintln!(
+            "Não foi possível criar o snapshot pré-migração {}: {}",
+            backup_path.display(),
+            error
+        );
+    }
+    Connection::open(path)
+}
+
+/*
+ * Migration version is stored inside SQLite itself (`PRAGMA user_version`),
+ * so app code updates do not point the application at a new empty database.
+ * Keep the Tauri identifier and `soaa.db` name stable across releases.
+ */
 /// Executa uma sequência de gravações dentro de UMA transação SQL.
 ///
 /// Se a closure falhar, a transação é descartada sem commit e toda escrita parcial
@@ -77,7 +133,8 @@ fn migrate_focus_and_review_tables(connection: &Connection) -> SqlResult<()> {
             .map(|count| count > 0)
     };
 
-    if table_exists("pomodoro_sessions")? {
+    let imported_pomodoro_history = table_exists("pomodoro_sessions")?;
+    if imported_pomodoro_history {
         connection.execute_batch(
             "DROP TABLE IF EXISTS focus_sessions;
              ALTER TABLE pomodoro_sessions RENAME TO focus_sessions;
@@ -99,6 +156,24 @@ fn migrate_focus_and_review_tables(connection: &Connection) -> SqlResult<()> {
     if !focus_columns.iter().any(|column| column == "zone") {
         connection.execute_batch(
             "ALTER TABLE focus_sessions ADD COLUMN zone TEXT NOT NULL DEFAULT 'baixa' CHECK(zone IN ('alta', 'media', 'baixa'));",
+        )?;
+    }
+    if !focus_columns.iter().any(|column| column == "focus_mode") {
+        connection.execute_batch(
+            "ALTER TABLE focus_sessions ADD COLUMN focus_mode TEXT NOT NULL DEFAULT 'deep_work' CHECK(focus_mode IN ('deep_work', 'pomodoro'));",
+        )?;
+        if imported_pomodoro_history {
+            connection.execute("UPDATE focus_sessions SET focus_mode = 'pomodoro'", [])?;
+        }
+    }
+    if !focus_columns.iter().any(|column| column == "cognitive_mode") {
+        connection.execute_batch(
+            "ALTER TABLE focus_sessions ADD COLUMN cognitive_mode TEXT NOT NULL DEFAULT 'general' CHECK(cognitive_mode IN ('general', 'problem_solving', 'retrieval', 'conceptual_reading', 'writing', 'mixed_questions'));",
+        )?;
+    }
+    if !focus_columns.iter().any(|column| column == "gross_minutes") {
+        connection.execute_batch(
+            "ALTER TABLE focus_sessions ADD COLUMN gross_minutes INTEGER CHECK(gross_minutes IS NULL OR gross_minutes >= 0);",
         )?;
     }
     connection.execute_batch(
@@ -143,7 +218,7 @@ fn migrate(connection: &Connection) -> SqlResult<()> {
         ("goal_accuracy", "ALTER TABLE subjects ADD COLUMN goal_accuracy INTEGER NOT NULL DEFAULT 75"),
         ("goal_coverage", "ALTER TABLE subjects ADD COLUMN goal_coverage INTEGER NOT NULL DEFAULT 100"),
         ("current_level", "ALTER TABLE subjects ADD COLUMN current_level INTEGER NOT NULL DEFAULT 1"),
-        ("target_level", "ALTER TABLE subjects ADD COLUMN target_level INTEGER NOT NULL DEFAULT 5"),
+        ("target_level", "ALTER TABLE subjects ADD COLUMN target_level INTEGER NOT NULL DEFAULT 4"),
     ] {
         if !subject_columns.iter().any(|existing| existing == column) {
             connection.execute_batch(ddl)?;
@@ -158,11 +233,20 @@ fn migrate(connection: &Connection) -> SqlResult<()> {
         ("start_date", "ALTER TABLE user_settings ADD COLUMN start_date TEXT"),
         ("exam_date", "ALTER TABLE user_settings ADD COLUMN exam_date TEXT"),
         ("study_days", "ALTER TABLE user_settings ADD COLUMN study_days TEXT"),
+        ("preferred_course", "ALTER TABLE user_settings ADD COLUMN preferred_course TEXT"),
+        ("focus_area", "ALTER TABLE user_settings ADD COLUMN focus_area TEXT"),
     ] {
         if !settings_columns.iter().any(|existing| existing == column) {
             connection.execute_batch(ddl)?;
         }
     }
+
+    // As versões anteriores exibiam cinco faixas; a escala atual tem quatro.
+    // A conversão mantém o sentido dos dados e limita qualquer valor fora dela.
+    connection.execute(
+        "UPDATE subjects SET current_level = MIN(4, MAX(1, current_level)), target_level = MIN(4, MAX(1, target_level))",
+        [],
+    )?;
 
     let focus_columns_legacy: Vec<String> = connection
         .prepare("PRAGMA table_info(focus_sessions)")?
@@ -205,7 +289,10 @@ fn migrate(connection: &Connection) -> SqlResult<()> {
     // de tabelas legadas, que descarta os índices criados pelo SCHEMA na tabela vazia.
     connection.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_focus_subject_started ON focus_sessions(subject_id, started_at);
-         CREATE INDEX IF NOT EXISTS idx_fsrs_reviews_item ON fsrs_reviews(item_id, reviewed_at);",
+         CREATE INDEX IF NOT EXISTS idx_fsrs_reviews_item ON fsrs_reviews(item_id, reviewed_at);
+         CREATE INDEX IF NOT EXISTS idx_focus_user_started ON focus_sessions(user_id, started_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_brain_dumps_user_created ON brain_dump_logs(user_id, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_buffer_user_status ON buffer_allocations(user_id, status);",
     )?;
 
     Ok(())
@@ -226,8 +313,28 @@ CREATE TABLE IF NOT EXISTS user_settings (
   exam_track TEXT NOT NULL DEFAULT 'ITA',
   start_date TEXT,
   exam_date TEXT,
-  study_days TEXT
+  study_days TEXT,
+  preferred_course TEXT,
+  focus_area TEXT
 );
+
+CREATE TABLE IF NOT EXISTS course_subject_weights (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  course_id TEXT NOT NULL,
+  institution TEXT NOT NULL,
+  exam_track TEXT NOT NULL,
+  subject_name TEXT NOT NULL,
+  preparation_weight REAL NOT NULL CHECK (preparation_weight BETWEEN 1 AND 5),
+  applied_weight INTEGER NOT NULL CHECK (applied_weight BETWEEN 1 AND 5),
+  admission_weight REAL CHECK (admission_weight IS NULL OR admission_weight > 0),
+  target_level INTEGER NOT NULL CHECK (target_level BETWEEN 1 AND 4),
+  source_edition TEXT,
+  source_url TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, course_id, subject_name)
+);
+CREATE INDEX IF NOT EXISTS idx_course_weights_user_course
+  ON course_subject_weights(user_id, course_id);
 
 CREATE TABLE IF NOT EXISTS subjects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -303,12 +410,15 @@ CREATE TABLE IF NOT EXISTS focus_sessions (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
   material_id INTEGER REFERENCES study_materials(id) ON DELETE SET NULL,
+  focus_mode TEXT NOT NULL DEFAULT 'deep_work' CHECK(focus_mode IN ('deep_work', 'pomodoro')),
+  cognitive_mode TEXT NOT NULL DEFAULT 'general' CHECK(cognitive_mode IN ('general', 'problem_solving', 'retrieval', 'conceptual_reading', 'writing', 'mixed_questions')),
   goal_type TEXT NOT NULL CHECK(goal_type IN ('paginas', 'topicos', 'exercicios')),
   goal_text TEXT,
   page_start INTEGER,
   page_end INTEGER,
   planned_minutes INTEGER NOT NULL CHECK(planned_minutes > 0),
   elapsed_minutes INTEGER NOT NULL DEFAULT 0 CHECK(elapsed_minutes >= 0),
+  gross_minutes INTEGER CHECK(gross_minutes IS NULL OR gross_minutes >= 0),
   planning_minutes INTEGER NOT NULL DEFAULT 0,
   interrupts INTEGER NOT NULL DEFAULT 0 CHECK(interrupts >= 0),
   completion_rate REAL NOT NULL DEFAULT 0 CHECK(completion_rate >= 0 AND completion_rate <= 1),
@@ -375,14 +485,19 @@ CREATE TABLE IF NOT EXISTS fsrs_reviews (
 CREATE INDEX IF NOT EXISTS idx_subjects_user ON subjects(user_id);
 CREATE INDEX IF NOT EXISTS idx_materials_user ON study_materials(user_id);
 CREATE INDEX IF NOT EXISTS idx_questions_user_date ON question_results(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_questions_subject ON question_results(subject_id);
 CREATE INDEX IF NOT EXISTS idx_topics_subject ON topics(subject_id);
 CREATE INDEX IF NOT EXISTS idx_focus_subject_started ON focus_sessions(subject_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_focus_user_started ON focus_sessions(user_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_day_allocations_user ON day_allocations(user_id);
 CREATE INDEX IF NOT EXISTS idx_srs_items_user ON spaced_repetition_items(user_id);
+CREATE INDEX IF NOT EXISTS idx_srs_items_subject ON spaced_repetition_items(subject_id);
 CREATE INDEX IF NOT EXISTS idx_fsrs_reviews_item ON fsrs_reviews(item_id, reviewed_at);
+CREATE INDEX IF NOT EXISTS idx_brain_dumps_user_created ON brain_dump_logs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_buffer_user_status ON buffer_allocations(user_id, status);
 "#;
 
-fn seed(connection: &mut Connection) -> SqlResult<()> {
+fn seed(connection: &Connection) -> SqlResult<()> {
     connection.execute(
         "INSERT OR IGNORE INTO users (id, email, password_hash) VALUES (?1, ?2, NULL)",
         params![DEFAULT_USER_ID, "local@soaa.app"],
@@ -441,14 +556,13 @@ fn seed(connection: &mut Connection) -> SqlResult<()> {
         ("Biologia", 3, 3, "emerald"),
         ("Humanas · ENEM", 2, 3, "orange"),
     ];
-    let transaction = connection.transaction()?;
     for (name, weight, difficulty, color) in initial_subjects {
-        transaction.execute(
+        connection.execute(
             "INSERT INTO subjects (user_id, name, weight, difficulty, color) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![DEFAULT_USER_ID, name, weight, difficulty, color],
         )?;
     }
-    transaction.commit()
+    Ok(())
 }
 
 fn subject_from_row(row: &Row<'_>) -> SqlResult<Subject> {
@@ -654,7 +768,7 @@ pub fn delete_day_allocation(connection: &mut Connection, subject_id: i64) -> Sq
 
 pub fn get_profile(connection: &Connection) -> SqlResult<Profile> {
     connection.query_row(
-        "SELECT daily_hours, weekly_days, exam_track, start_date, exam_date, study_days FROM user_settings WHERE user_id = ?1",
+        "SELECT daily_hours, weekly_days, exam_track, start_date, exam_date, study_days, preferred_course, focus_area FROM user_settings WHERE user_id = ?1",
         params![DEFAULT_USER_ID],
         |row| {
             let weekly_days: i64 = row.get(1)?;
@@ -670,6 +784,8 @@ pub fn get_profile(connection: &Connection) -> SqlResult<Profile> {
                 start_date: row.get(3)?,
                 exam_date: row.get(4)?,
                 study_days,
+                preferred_course: row.get(6)?,
+                focus_area: row.get(7)?,
             })
         },
     )
@@ -679,11 +795,78 @@ pub fn update_profile(connection: &mut Connection, profile: &ProfileInput) -> Sq
     run_write(connection, |connection| {
         let study_days_json = serde_json::to_string(&profile.study_days).unwrap_or_else(|_| "[]".into());
         connection.execute(
-            "UPDATE user_settings SET daily_hours = ?1, weekly_days = ?2, exam_track = ?3, start_date = ?4, exam_date = ?5, study_days = ?6 WHERE user_id = ?7",
-            params![profile.daily_hours, profile.weekly_days, profile.exam_track, profile.start_date, profile.exam_date, study_days_json, DEFAULT_USER_ID],
+            "UPDATE user_settings SET daily_hours = ?1, weekly_days = ?2, exam_track = ?3, start_date = ?4, exam_date = ?5, study_days = ?6, preferred_course = ?7, focus_area = ?8 WHERE user_id = ?9",
+            params![profile.daily_hours, profile.weekly_days, profile.exam_track, profile.start_date, profile.exam_date, study_days_json, profile.preferred_course, profile.focus_area, DEFAULT_USER_ID],
         )?;
+        if let Some(weights) = &profile.course_weights {
+            replace_course_weights(connection, weights)?;
+        }
         get_profile(connection)
     })
+}
+
+/// Persiste a matriz de preparação do curso e aplica seus pesos/metas às
+/// matérias que já estão no plano. O perfil, a matriz e o recalculo do ranking
+/// ficam dentro da mesma transação.
+fn replace_course_weights(
+    connection: &Connection,
+    input: &CourseWeightProfileInput,
+) -> SqlResult<usize> {
+    if input.course_id.trim().is_empty() || input.institution.trim().is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "curso e instituição são obrigatórios".into(),
+        ));
+    }
+    if input.subjects.len() > 500 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "matriz de curso excede 500 matérias".into(),
+        ));
+    }
+
+    connection.execute(
+        "DELETE FROM course_subject_weights WHERE user_id = ?1 AND course_id = ?2",
+        params![DEFAULT_USER_ID, input.course_id],
+    )?;
+
+    let mut stored = 0;
+    for subject in &input.subjects {
+        if subject.subject_name.trim().is_empty()
+            || !(1.0..=5.0).contains(&subject.preparation_weight)
+            || !(1..=5).contains(&subject.applied_weight)
+            || !(1..=4).contains(&subject.target_level)
+            || subject.admission_weight.is_some_and(|weight| !weight.is_finite() || weight <= 0.0)
+        {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "peso ou nível de matéria inválido".into(),
+            ));
+        }
+        connection.execute(
+            "INSERT INTO course_subject_weights (
+                user_id, course_id, institution, exam_track, subject_name,
+                preparation_weight, applied_weight, admission_weight,
+                target_level, source_edition, source_url
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                DEFAULT_USER_ID,
+                input.course_id,
+                input.institution,
+                input.exam_track,
+                subject.subject_name,
+                subject.preparation_weight,
+                subject.applied_weight,
+                subject.admission_weight,
+                subject.target_level,
+                input.source_edition,
+                input.source_url,
+            ],
+        )?;
+        connection.execute(
+            "UPDATE subjects SET weight = ?1, target_level = ?2 WHERE user_id = ?3 AND name = ?4",
+            params![subject.applied_weight, subject.target_level, DEFAULT_USER_ID, subject.subject_name],
+        )?;
+        stored += 1;
+    }
+    Ok(stored)
 }
 
 fn material_from_row(row: &Row<'_>) -> SqlResult<StudyMaterial> {
@@ -1298,7 +1481,7 @@ pub fn suggest_focus_timebox(
         "SELECT planned_minutes, completed, exit_reason, elapsed_minutes,
                 planned_minutes AS planned
          FROM focus_sessions
-         WHERE user_id = ?1 AND subject_id = ?2
+         WHERE user_id = ?1 AND subject_id = ?2 AND focus_mode = 'deep_work'
          ORDER BY started_at DESC
          LIMIT 8",
     )?;
@@ -1380,12 +1563,15 @@ fn focus_from_row(row: &Row<'_>, subject_name: &str, color: &str, material_title
         color: color.to_string(),
         material_id: row.get("material_id")?,
         material_title: material_title.map(str::to_string),
+        focus_mode: FocusMode::from_db(&row.get::<_, String>("focus_mode")?),
+        cognitive_mode: CognitiveMode::from_db(&row.get::<_, String>("cognitive_mode")?),
         goal_type: row.get("goal_type")?,
         goal_text: row.get("goal_text")?,
         page_start: row.get("page_start")?,
         page_end: row.get("page_end")?,
         planned_minutes: row.get("planned_minutes")?,
         elapsed_minutes: row.get("elapsed_minutes")?,
+        gross_minutes: row.get("gross_minutes")?,
         interrupts: row.get("interrupts")?,
         completion_rate: row.get("completion_rate")?,
         zone: FocusZone::from_db(&row.get::<_, String>("zone")?),
@@ -1399,8 +1585,8 @@ fn focus_from_row(row: &Row<'_>, subject_name: &str, color: &str, material_title
 
 pub fn list_focus_sessions(connection: &Connection) -> SqlResult<Vec<FocusSession>> {
     let mut statement = connection.prepare(
-        "SELECT s.id, s.user_id, s.subject_id, s.material_id, s.goal_type, s.goal_text,
-                s.page_start, s.page_end, s.planned_minutes, s.elapsed_minutes, s.interrupts,
+        "SELECT s.id, s.user_id, s.subject_id, s.material_id, s.focus_mode, s.cognitive_mode, s.goal_type, s.goal_text,
+                s.page_start, s.page_end, s.planned_minutes, s.elapsed_minutes, s.gross_minutes, s.interrupts,
                 s.completion_rate, s.zone, s.exit_reason, s.completed, s.status, s.completion_percentage, s.started_at,
                 sub.name AS subject_name, sub.color, m.title AS material_title
          FROM focus_sessions s
@@ -1409,6 +1595,27 @@ pub fn list_focus_sessions(connection: &Connection) -> SqlResult<Vec<FocusSessio
          WHERE s.user_id = ?1
          ORDER BY s.started_at DESC
          LIMIT 100",
+    )?;
+    statement
+        .query_map(params![DEFAULT_USER_ID], |row| {
+            focus_from_row(row, &row.get::<_, String>("subject_name")?, &row.get::<_, String>("color")?, row.get::<_, Option<String>>("material_title")?.as_deref())
+        })?
+        .collect()
+}
+
+/// Histórico completo de ciclos Pomodoro para o painel de métricas.
+/// A consulta fica separada do Deep Work e não limita o histórico aos últimos 100 blocos.
+pub fn list_pomodoro_sessions(connection: &Connection) -> SqlResult<Vec<FocusSession>> {
+    let mut statement = connection.prepare(
+        "SELECT s.id, s.user_id, s.subject_id, s.material_id, s.focus_mode, s.cognitive_mode, s.goal_type, s.goal_text,
+                s.page_start, s.page_end, s.planned_minutes, s.elapsed_minutes, s.gross_minutes, s.interrupts,
+                s.completion_rate, s.zone, s.exit_reason, s.completed, s.status, s.completion_percentage, s.started_at,
+                sub.name AS subject_name, sub.color, m.title AS material_title
+         FROM focus_sessions s
+         JOIN subjects sub ON sub.id = s.subject_id
+         LEFT JOIN study_materials m ON m.id = s.material_id
+         WHERE s.user_id = ?1 AND s.focus_mode = 'pomodoro'
+         ORDER BY s.started_at DESC, s.id DESC",
     )?;
     statement
         .query_map(params![DEFAULT_USER_ID], |row| {
@@ -1431,20 +1638,23 @@ fn insert_focus_session(
 ) -> SqlResult<i64> {
     connection.execute(
         "INSERT INTO focus_sessions
-            (user_id, subject_id, material_id, goal_type, goal_text, page_start, page_end,
-             planned_minutes, elapsed_minutes, interrupts, completion_rate, zone, exit_reason,
+            (user_id, subject_id, material_id, focus_mode, cognitive_mode, goal_type, goal_text, page_start, page_end,
+             planned_minutes, elapsed_minutes, gross_minutes, interrupts, completion_rate, zone, exit_reason,
              completed, status, completion_percentage, started_at, ended_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
             DEFAULT_USER_ID,
             input.subject_id,
             input.material_id,
+            input.focus_mode.as_db(),
+            input.cognitive_mode.as_db(),
             input.goal_type,
             input.goal_text,
             input.page_start,
             input.page_end,
             input.planned_minutes,
             input.elapsed_minutes,
+            input.gross_minutes,
             input.interrupts,
             round2(completion_rate),
             zone.as_db(),
@@ -1539,9 +1749,9 @@ pub fn log_brain_dump(connection: &mut Connection, input: &BrainDumpLogInput) ->
                 Ok(BrainDumpLog {
                     id: row.get(0)?,
                     subject_id: row.get(1)?,
-                    subject_name: row.get(2)?,
-                    note: row.get(3)?,
-                    created_at: row.get(4)?,
+                    subject_name: row.get(4)?,
+                    note: row.get(2)?,
+                    created_at: row.get(3)?,
                 })
             },
         )
@@ -1562,9 +1772,9 @@ pub fn list_brain_dumps(connection: &Connection) -> SqlResult<Vec<BrainDumpLog>>
             Ok(BrainDumpLog {
                 id: row.get(0)?,
                 subject_id: row.get(1)?,
-                subject_name: row.get(2)?,
-                note: row.get(3)?,
-                created_at: row.get(4)?,
+                subject_name: row.get(4)?,
+                note: row.get(2)?,
+                created_at: row.get(3)?,
             })
         })?
         .collect()
@@ -1631,6 +1841,14 @@ pub fn learning_speed(connection: &Connection, subject_id: Option<i64>) -> SqlRe
 /// Ordena matérias agrupando por matéria-mãe (prefixo antes de " · ").
 /// Grupos com maior pico de risco vêm primeiro; dentro do grupo, mantém a
 /// ordem original (ordem do catálogo), garantindo sub-áreas em sequência.
+/// Exatas (Matemática/Física/Química) e teoria intercalam: a rotação diária
+/// nunca empilha dois dias seguidos com o mesmo tipo de bloco principal.
+fn is_exatas(name: &str) -> bool {
+    ["Matemática", "Física", "Química"]
+        .iter()
+        .any(|stem| name.contains(stem))
+}
+
 fn sequence_by_parent(rows: Vec<(i64, String, String, i64)>) -> Vec<(i64, String, String, i64)> {
     let mut buckets: Vec<(String, Vec<(i64, String, String, i64)>)> = Vec::new();
     for row in rows {
@@ -1651,7 +1869,40 @@ fn sequence_by_parent(rows: Vec<(i64, String, String, i64)>) -> Vec<(i64, String
             .cmp(&left_peak)
             .then_with(|| left.0.cmp(&right.0))
     });
-    buckets
+
+    let peak = |bucket: &(String, Vec<(i64, String, String, i64)>)| {
+        bucket.1.iter().map(|row| row.3).max().unwrap_or(0)
+    };
+    let mut exacts: std::collections::VecDeque<_> = buckets
+        .iter()
+        .filter(|bucket| is_exatas(&bucket.0))
+        .cloned()
+        .collect();
+    let mut others: std::collections::VecDeque<_> = buckets
+        .iter()
+        .filter(|bucket| !is_exatas(&bucket.0))
+        .cloned()
+        .collect();
+
+    // Alterna os grupos; o primeiro é o de maior pico de risco.
+    let mut prefer_exatas = match (exacts.front(), others.front()) {
+        (Some(left), Some(right)) => peak(left) >= peak(right),
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let mut ordered: Vec<(String, Vec<(i64, String, String, i64)>)> = Vec::new();
+    while !exacts.is_empty() || !others.is_empty() {
+        let take_exatas = !exacts.is_empty() && (prefer_exatas || others.is_empty());
+        let bucket = if take_exatas {
+            exacts.pop_front()
+        } else {
+            others.pop_front()
+        };
+        ordered.push(bucket.expect("fila de grupos não vazia"));
+        prefer_exatas = !take_exatas;
+    }
+
+    ordered
         .into_iter()
         .flat_map(|(_, rows)| rows)
         .collect()
@@ -1673,11 +1924,24 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
     let horizon_days = (exam - start).num_days();
     let weeks = (horizon_days.max(1) / 7).max(1);
     // total_hours chega como carga SEMANAL (diário × dias/semana no wizard).
-    // Distribui essa carga pelos dias do horizonte, em blocos de 5, sem cortar.
-    let total_days = (horizon_days + 1).max(1) as f64;
+    // A carga é diluída apenas pelos dias de estudo escolhidos no perfil, em
+    // blocos de 5: dia de descanso não recebe bloco e o totalizador da semana
+    // bate com o planejado.
+    let profile_study_days = get_profile(connection)
+        .map(|profile| profile.study_days)
+        .unwrap_or_default();
+    let mut study_days: Vec<usize> = profile_study_days
+        .iter()
+        .filter(|day| (0..=6_i64).contains(day))
+        .map(|day| *day as usize)
+        .collect();
+    study_days.sort_unstable();
+    study_days.dedup();
+    if study_days.is_empty() {
+        study_days = (0..7).collect();
+    }
     let weekly_minutes = input.total_hours.clamp(0.5, 24.0 * 7.0) * 60.0;
-    let daily_minutes = (weekly_minutes * weeks as f64 / total_days / 5.0).round() as i64 * 5;
-    let daily_minutes = daily_minutes.max(5);
+    let daily_minutes = ((weekly_minutes / study_days.len() as f64 / 5.0).round() * 5.0).max(30.0) as i64;
 
     // Fases por evidência: a construção consolida com revisão ativa espaçada
     // (recall semanal); o último quarto — mínimo de duas semanas — troca para
@@ -1736,47 +2000,104 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
 
     let weekday_labels = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
     let mut days = Vec::new();
-    let limit = (horizon_days + 1).max(1).min(42) as usize;
+    // Rota já iniciada (start no passado e prova no futuro): o preview começa
+    // hoje para não exibir dias vencidos; as fases seguem ancoradas em start.
+    let today = chrono::Local::now().date_naive();
+    let window_start = if start < today && today < exam { today } else { start };
+    let limit = ((exam - window_start).num_days() + 1).max(1).min(42) as usize;
+
+    let subject_count = risk.len();
+    let days_per_week = study_days.len();
+    // Um terceiro bloco entra quando a matriz não caberia em dois focos por
+    // dia de estudo: é o que garante o piso semanal de 30 min para cada
+    // matéria em matrizes grandes (ex.: ENEM + curso).
+    let slot_count = if subject_count > days_per_week * 2 && daily_minutes >= 150 {
+        3
+    } else if subject_count > 1 && daily_minutes >= 60 {
+        2
+    } else {
+        1
+    };
+    let slot_fractions: &[f64] = match slot_count {
+        3 => &[0.5, 0.3, 0.2],
+        2 => &[0.6, 0.4],
+        _ => &[1.0],
+    };
+    let mut slot_minutes: Vec<i64> = Vec::new();
+    let mut remaining = daily_minutes;
+    for (index, fraction) in slot_fractions.iter().enumerate().take(slot_count - 1) {
+        let raw = (daily_minutes as f64 * fraction / 5.0).round() as i64 * 5;
+        let reserve = 30 * (slot_count - index - 1) as i64;
+        let minutes = raw.clamp(30, remaining - reserve);
+        slot_minutes.push(minutes);
+        remaining -= minutes;
+    }
+    slot_minutes.push(remaining);
+
+    // Cobertura com piso: o reforço de cada dia vai para a matéria com menos
+    // minutos já alocados na semana corrente (empate: a usada há mais tempo).
+    let mut weekly_usage = vec![0_i64; subject_count];
+    let mut last_used = vec![-1_i64; subject_count];
+    let mut week_anchor = i64::MIN;
+    let mut study_index: i64 = 0;
+
     for offset in 0..limit {
-        let date = start + Duration::days(offset as i64);
+        let date = window_start + Duration::days(offset as i64);
         let weekday = date.weekday().num_days_from_monday() as usize;
+        // Só os dias de estudo escolhidos no perfil recebem blocos.
+        if !study_days.contains(&weekday) {
+            continue;
+        }
+        let anchor = (date - Duration::days(weekday as i64)).num_days_from_ce() as i64;
+        if anchor != week_anchor {
+            week_anchor = anchor;
+            weekly_usage.fill(0);
+        }
         let early_window = weekday <= 2;
-        let primary_minutes = (daily_minutes as f64 * if early_window { 0.6 } else { 0.5 }).round() as i64;
-        let primary_minutes = (primary_minutes / 5 * 5).max(15);
 
-        // Rotação sem repetição: o bloco principal gira por todas as matérias
-        // ordenadas por risco (IP + déficit de nível) em vez de repetir as de
-        // maior escore todos os dias.
-        let subject_count = risk.len();
-        let primary_index = offset % subject_count;
-        let (id0, name0, color0, risk0) = &risk[primary_index];
-        let secondary_index = (offset * 2 + 1) % subject_count;
-
-        let mut focus = vec![PlanFocus {
-            subject_id: *id0,
-            subject_name: name0.clone(),
-            color: color0.clone(),
-            risk: *risk0,
-            minutes: primary_minutes,
-            slot: if early_window {
-                "Janela matutina · aquecimento pós-sono".to_string()
+        let mut focus = Vec::new();
+        let mut used_today: Vec<usize> = Vec::new();
+        for (slot_index, minutes) in slot_minutes.iter().enumerate() {
+            let pick = if slot_index == 0 {
+                // Rotação sem repetição: o bloco principal gira por todas as
+                // matérias ordenadas por risco (IP + déficit de nível) em vez
+                // de repetir as de maior escore todos os dias.
+                Some((study_index % subject_count as i64) as usize)
             } else {
-                "Bloco principal".to_string()
-            },
-        }];
-        if subject_count > 1 && secondary_index != primary_index && daily_minutes - primary_minutes >= 10 {
-            let (id1, name1, color1, risk1) = &risk[secondary_index];
+                // Alternância teoria × exatas: prefere a categoria oposta ao
+                // principal do dia; dentro dela, a matéria com menos minutos na
+                // semana (empate: a usada há mais tempo) fecha o piso de 30 min.
+                let primary_exatas = is_exatas(&risk[used_today[0]].1);
+                (0..subject_count)
+                    .filter(|index| !used_today.contains(index))
+                    .min_by_key(|index| {
+                        (
+                            (is_exatas(&risk[*index].1) == primary_exatas) as i64,
+                            weekly_usage[*index],
+                            last_used[*index],
+                            *index,
+                        )
+                    })
+            };
+            let Some(index) = pick else { break };
+            let (id, name, color, risk_level) = &risk[index];
+            let slot = match (slot_index, early_window) {
+                (0, true) => "Janela matutina · aquecimento pós-sono",
+                (0, false) => "Bloco principal",
+                (1, true) => "Segundo alvo · alternância",
+                (1, false) => "Tarde · reforço de déficit",
+                _ => "Terceiro bloco · fixação leve",
+            };
+            weekly_usage[index] += minutes;
+            last_used[index] = study_index;
+            used_today.push(index);
             focus.push(PlanFocus {
-                subject_id: *id1,
-                subject_name: name1.clone(),
-                color: color1.clone(),
-                risk: *risk1,
-                minutes: daily_minutes - primary_minutes,
-                slot: if early_window {
-                    "Segundo alvo · alternância".to_string()
-                } else {
-                    "Tarde · reforço de déficit".to_string()
-                },
+                subject_id: *id,
+                subject_name: name.clone(),
+                color: color.clone(),
+                risk: *risk_level,
+                minutes: *minutes,
+                slot: slot.to_string(),
             });
         }
         days.push(PlanDay {
@@ -1784,6 +2105,7 @@ pub fn generate_study_plan(connection: &Connection, input: &PlanInput) -> SqlRes
             weekday_label: weekday_labels[weekday].to_string(),
             focus_subjects: focus,
         });
+        study_index += 1;
     }
 
     Ok(PlanResponse {
@@ -2805,6 +3127,126 @@ mod tests {
         connection
     }
 
+    /// A meta por curso preferido sobrevive ao ciclo gravar → ler e pode ser limpa.
+    #[test]
+    fn update_profile_persists_preferred_course() {
+        let mut connection = memory_connection();
+        let base = get_profile(&connection).unwrap();
+        assert!(base.preferred_course.is_none(), "perfil novo não deve ter curso preferido");
+
+        let saved = update_profile(
+            &mut connection,
+            &ProfileInput {
+                daily_hours: base.daily_hours,
+                weekly_days: base.weekly_days,
+                exam_track: "ENEM".into(),
+                start_date: base.start_date.clone(),
+                exam_date: base.exam_date.clone(),
+                study_days: base.study_days.clone(),
+                preferred_course: Some("eng-aeroespacial".into()),
+                focus_area: base.focus_area.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.preferred_course.as_deref(), Some("eng-aeroespacial"));
+        assert_eq!(saved.exam_track, "ENEM");
+        assert_eq!(
+            get_profile(&connection).unwrap().preferred_course.as_deref(),
+            Some("eng-aeroespacial"),
+            "a meta do curso deve persistir na releitura"
+        );
+
+        let cleared = update_profile(
+            &mut connection,
+            &ProfileInput {
+                daily_hours: base.daily_hours,
+                weekly_days: base.weekly_days,
+                exam_track: base.exam_track,
+                start_date: base.start_date,
+                exam_date: base.exam_date,
+                study_days: base.study_days,
+                preferred_course: None,
+                focus_area: None,
+            },
+        )
+        .unwrap();
+        assert!(cleared.preferred_course.is_none(), "remover a meta deve voltar a None");
+    }
+
+    /// A área de ênfase escolhida na rota sobrevive ao ciclo gravar → ler e pode ser limpa.
+    #[test]
+    fn update_profile_persists_focus_area() {
+        let mut connection = memory_connection();
+        let base = get_profile(&connection).unwrap();
+        assert!(base.focus_area.is_none(), "perfil novo não deve ter área de ênfase");
+
+        let saved = update_profile(
+            &mut connection,
+            &ProfileInput {
+                daily_hours: base.daily_hours,
+                weekly_days: base.weekly_days,
+                exam_track: base.exam_track.clone(),
+                start_date: base.start_date.clone(),
+                exam_date: base.exam_date.clone(),
+                study_days: base.study_days.clone(),
+                preferred_course: base.preferred_course.clone(),
+                focus_area: Some("exatas".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.focus_area.as_deref(), Some("exatas"));
+        assert_eq!(
+            get_profile(&connection).unwrap().focus_area.as_deref(),
+            Some("exatas"),
+            "a área de ênfase deve persistir na releitura"
+        );
+
+        let cleared = update_profile(
+            &mut connection,
+            &ProfileInput {
+                daily_hours: base.daily_hours,
+                weekly_days: base.weekly_days,
+                exam_track: base.exam_track,
+                start_date: base.start_date,
+                exam_date: base.exam_date,
+                study_days: base.study_days,
+                preferred_course: base.preferred_course,
+                focus_area: None,
+            },
+        )
+        .unwrap();
+        assert!(cleared.focus_area.is_none(), "remover a ênfase deve voltar a None");
+    }
+
+    /// Regressão: o mapeamento posicional de `brain_dump_logs` já deslocou as
+    /// colunas uma vez — `subject_name` deve vir do JOIN e `note` do próprio
+    /// registro, nunca trocados.
+    #[test]
+    fn brain_dump_maps_subject_name_and_note_to_the_right_columns() {
+        let mut connection = memory_connection();
+        let subject = list_subjects(&connection).unwrap().into_iter().next().unwrap();
+        let note = "ideia para revisar amanhã".to_string();
+
+        let logged = log_brain_dump(
+            &mut connection,
+            &BrainDumpLogInput {
+                subject_id: Some(subject.id),
+                note: note.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(logged.note, note, "note deve carregar o texto digitado, não a data");
+        assert_eq!(logged.subject_name.as_deref(), Some(subject.name.as_str()));
+        assert!(logged.created_at.len() >= 10, "created_at deve ser uma data real");
+
+        let listed = list_brain_dumps(&connection).unwrap();
+        let first = listed.first().expect("o dump gravado deve aparecer na listagem");
+        assert_eq!(first.id, logged.id);
+        assert_eq!(first.note, note);
+        assert_eq!(first.subject_name.as_deref(), Some(subject.name.as_str()));
+        assert_eq!(first.created_at, logged.created_at);
+    }
+
     /// PASSO 4 — atomicidade: uma gravação que falha no meio não deixa
     /// registros parciais; toda a transação é revertida.
     #[test]
@@ -2867,7 +3309,7 @@ mod tests {
     }
 
     /// Sub-áreas da mesma matéria permanecem em bloco (ordem do catálogo),
-    /// e o pico de risco comanda a ordem dos grupos.
+    /// o pico de risco comanda a ordem dos grupos e exatas/teoria intercalam.
     #[test]
     fn sequence_by_parent_groups_subareas_keeps_catalog_order() {
         let input = vec![
@@ -2882,10 +3324,11 @@ mod tests {
             names,
             vec![
                 "Física · Mecânica",
+                "Biologia Ensino Médio",
                 "Matemática · Álgebra",
-                "Matemática · Geometria",
-                "Biologia Ensino Médio"
-            ]
+                "Matemática · Geometria"
+            ],
+            "exatas e teoria não ficam lado a lado: Biologia se infiltra entre Física e Matemática"
         );
     }
 
@@ -2905,31 +3348,24 @@ mod tests {
         )
         .unwrap();
 
-        // Horizonte de 90 dias → 12 semanas; rota limitada a 42 dias.
+        // Horizonte de 90 dias → 12 semanas; a janela de 42 dias corridos vira
+        // 36 blocos exibidos, pois domingo é descanso no perfil padrão.
         assert_eq!(response.weeks, 12);
-        assert_eq!(response.days.len(), 42);
+        assert_eq!(response.days.len(), 36);
         assert!(response.risk_name.is_some());
 
-        // Carga semanal de 36 h distribuída: 2160 × 12 / 91 em blocos de 5.
-        // Nos dias em que o reforço colidiria com o principal, só o principal
-        // entra (sem duplicar o mesmo foco no dia).
-        let mut single_focus_days = 0;
+        // Carga semanal de 36 h diluída só pelos dias de estudo, em blocos de
+        // 5: 2160 / 6 = 360 min por dia, sem dia de descanso na rota.
         for day in &response.days {
+            assert_ne!(day.weekday_label, "Dom", "domingo não recebe bloco: {}", day.date);
+            assert_eq!(day.focus_subjects.len(), 2, "dia de estudo com 2 focos: {}", day.date);
             let total: i64 = day.focus_subjects.iter().map(|focus| focus.minutes).sum();
-            match day.focus_subjects.len() {
-                1 => single_focus_days += 1,
-                2 => assert_eq!(total, 285),
-                other => panic!("a rota tem no máximo dois focos por dia: {other}"),
-            }
+            assert_eq!(total, 360, "o totalizador diário fecha a carga semanal: {}", day.date);
             for focus in &day.focus_subjects {
                 assert_eq!(focus.minutes % 5, 0, "blocos devem ser múltiplos de 5");
-                assert!(focus.minutes >= 15);
+                assert!(focus.minutes >= 30, "piso de 30 min por matéria");
             }
         }
-        assert_eq!(
-            single_focus_days, 6,
-            "7 matérias em 42 dias: o principal colide com o reforço a cada 7 dias"
-        );
 
         // Rotação: o alvo principal nunca repete em dias consecutivos e o
         // reforço do mesmo dia nunca coincide com o principal.
@@ -2940,9 +3376,7 @@ mod tests {
             );
         }
         for day in &response.days {
-            if day.focus_subjects.len() == 2 {
-                assert_ne!(day.focus_subjects[0].subject_id, day.focus_subjects[1].subject_id);
-            }
+            assert_ne!(day.focus_subjects[0].subject_id, day.focus_subjects[1].subject_id);
         }
 
         // Fases: construção nas semanas 1–9 e reta final nas 10–12.
@@ -3039,5 +3473,188 @@ mod tests {
             },
         );
         assert!(result.is_err());
+    }
+
+    /// Rota em curso: com start no passado e prova no futuro o preview começa
+    /// hoje (sem dias vencidos), mas as fases seguem ancoradas no início.
+    #[test]
+    fn generate_study_plan_preview_starts_today_for_ongoing_route() {
+        use chrono::Datelike;
+        let connection = memory_connection();
+        let today = chrono::Local::now().date_naive();
+        let start = today - chrono::Duration::days(30);
+        let response = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: start.format("%Y-%m-%d").to_string(),
+                exam_date: (today + chrono::Duration::days(200))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+                total_hours: 36.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(response.weeks, 32, "230 dias de horizonte → 32 semanas");
+        // A janela continua limitada a 42 dias corridos, mas a tabela mostra
+        // apenas os dias de estudo do perfil (fallback: 6 primeiros dias).
+        let study_days = [0usize, 1, 2, 3, 4, 5];
+        let first = if study_days.contains(&(today.weekday().num_days_from_monday() as usize)) {
+            today
+        } else {
+            today + chrono::Duration::days(1)
+        };
+        let expected_days = (0..42)
+            .filter(|offset| {
+                study_days.contains(
+                    &((today + chrono::Duration::days(*offset))
+                        .weekday()
+                        .num_days_from_monday() as usize),
+                )
+            })
+            .count();
+        assert_eq!(response.days.len(), expected_days);
+        assert_eq!(response.days[0].date, first.format("%Y-%m-%d").to_string());
+        assert_eq!(
+            response.phases[0].start_date,
+            start.format("%Y-%m-%d").to_string(),
+            "as fases não devem deslizar com o clamp do preview"
+        );
+    }
+
+    /// Reconfigurar a semana vale para a geração: dias fora do perfil não
+    /// recebem bloco, a carga semanal fecha nos dias escolhidos e cada matéria
+    /// recebe pelo menos 30 min já na primeira semana.
+    #[test]
+    fn generate_study_plan_distributes_load_only_across_study_days() {
+        let mut connection = memory_connection();
+        let base = get_profile(&connection).unwrap();
+        update_profile(
+            &mut connection,
+            &ProfileInput {
+                daily_hours: 5.0,
+                weekly_days: 3,
+                exam_track: base.exam_track.clone(),
+                start_date: base.start_date.clone(),
+                exam_date: base.exam_date.clone(),
+                study_days: vec![0, 2, 4],
+                preferred_course: None,
+                focus_area: None,
+            },
+        )
+        .unwrap();
+
+        let response = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: "2026-01-05".into(),
+                exam_date: "2026-03-02".into(),
+                total_hours: 30.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            response.days.len(),
+            18,
+            "42 dias de janela → 3 dias de estudo × 6 semanas"
+        );
+        for day in &response.days {
+            assert!(
+                ["Seg", "Qua", "Sex"].contains(&day.weekday_label.as_str()),
+                "descanso não recebe bloco: {}",
+                day.date
+            );
+            let total: i64 = day.focus_subjects.iter().map(|focus| focus.minutes).sum();
+            assert_eq!(
+                total, 600,
+                "5 h × 3 dias = 30 h semanais em blocos de 5: {}",
+                day.date
+            );
+            assert_eq!(
+                day.focus_subjects.len(),
+                3,
+                "matriz maior que 2× dias de estudo ganha o terceiro bloco"
+            );
+            for focus in &day.focus_subjects {
+                assert!(focus.minutes >= 30 && focus.minutes % 5 == 0);
+            }
+        }
+
+        // Piso por matéria: a primeira semana cobre as 7 matérias com ≥30 min.
+        let mut per_subject: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        for day in response.days.iter().take(3) {
+            for focus in &day.focus_subjects {
+                *per_subject.entry(focus.subject_id).or_insert(0) += focus.minutes;
+            }
+        }
+        assert_eq!(per_subject.len(), 7, "a primeira semana cobre a matriz inteira");
+        for (subject_id, minutes) in &per_subject {
+            assert!(*minutes >= 30, "piso semanal da matéria {subject_id}");
+        }
+    }
+
+    /// Rotação teoria × exatas: o principal nunca repete a categoria em dias
+    /// consecutivos e nenhum dia empilha dois blocos de exatas.
+    #[test]
+    fn generate_study_plan_alternates_exatas_with_theory() {
+        let connection = memory_connection();
+        let response = generate_study_plan(
+            &connection,
+            &PlanInput {
+                start_date: "2026-01-05".into(),
+                exam_date: "2026-04-05".into(),
+                total_hours: 36.0,
+            },
+        )
+        .unwrap();
+
+        let primaries: Vec<bool> = response
+            .days
+            .iter()
+            .map(|day| is_exatas(&day.focus_subjects[0].subject_name))
+            .collect();
+        assert!(primaries.iter().any(|exatas| *exatas), "a matriz semeada tem exatas");
+        assert!(primaries.iter().any(|exatas| !*exatas), "a matriz semeada tem teoria");
+        for pair in primaries.windows(2) {
+            assert!(
+                !(pair[0] && pair[1]),
+                "exatas não podem dominar dias consecutivos"
+            );
+        }
+        for day in &response.days {
+            let exatas_blocks = day
+                .focus_subjects
+                .iter()
+                .filter(|focus| is_exatas(&focus.subject_name))
+                .count();
+            assert!(exatas_blocks <= 1, "dia {} empilhou blocos de exatas", day.date);
+        }
+    }
+
+    /// As datas da rota definidas no wizard persistem no perfil e voltam na releitura.
+    #[test]
+    fn update_profile_persists_route_dates() {
+        let mut connection = memory_connection();
+        let base = get_profile(&connection).unwrap();
+        let saved = update_profile(
+            &mut connection,
+            &ProfileInput {
+                daily_hours: base.daily_hours,
+                weekly_days: base.weekly_days,
+                exam_track: base.exam_track.clone(),
+                start_date: Some("2026-06-14".into()),
+                exam_date: Some("2027-01-12".into()),
+                study_days: base.study_days.clone(),
+                preferred_course: base.preferred_course.clone(),
+                focus_area: base.focus_area.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.start_date.as_deref(), Some("2026-06-14"));
+        assert_eq!(saved.exam_date.as_deref(), Some("2027-01-12"));
+        let reread = get_profile(&connection).unwrap();
+        assert_eq!(reread.start_date.as_deref(), Some("2026-06-14"));
+        assert_eq!(reread.exam_date.as_deref(), Some("2027-01-12"));
     }
 }
